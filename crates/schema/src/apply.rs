@@ -57,22 +57,28 @@ pub fn plan_to_commands(
     };
 
     let mut cmds: Vec<Command> = Vec::new();
-    // Ensure a clip exists before ops that need one.
+    // Ensure a clip exists before ops that need one. Memoize the id: queued
+    // commands are not applied until the transaction runs, so a second call
+    // must not create a duplicate clip.
     let primary = primary_clip_id(project);
     let mut clip_created = false;
+    let mut ensured_id: Option<String> = primary;
+    // Aspect applied earlier in this same plan (queued, not yet in project).
+    let mut planned_ratio: Option<mycut_core::AspectRatio> = None;
 
     for op in &ops {
         match op {
             Operation::CutRanges { ranges, .. } => {
-                let cid = ensure_clip(project, &mut cmds, &mut clip_created, ctx);
+                let cid = ensure_clip_memo(project, &mut cmds, &mut clip_created, ctx, &mut ensured_id);
                 let cuts: Vec<(TimeMs, TimeMs)> =
                     ranges.iter().map(|r| (s_to_ms(r.start), s_to_ms(r.end))).collect();
-                cmds.extend(cut_commands(project, &cid, &cuts));
+                let info = effective_clip_info(project, &ensured_id, ctx);
+                cmds.extend(cut_commands(project, &cid, &cuts, info));
                 let removed: f64 = ranges.iter().map(|r| r.end - r.start).sum();
                 app.summary_parts.push(format!("Removed {removed:.1}s of footage"));
             }
             Operation::KeepRanges { ranges, .. } => {
-                let cid = ensure_clip(project, &mut cmds, &mut clip_created, ctx);
+                let cid = ensure_clip_memo(project, &mut cmds, &mut clip_created, ctx, &mut ensured_id);
                 // Keep = cut the complement.
                 let dur_ms = s_to_ms(ctx.source_duration_s);
                 let mut cuts: Vec<(TimeMs, TimeMs)> = Vec::new();
@@ -89,12 +95,13 @@ pub fn plan_to_commands(
                     cuts.push((cursor, dur_ms));
                 }
                 if !cuts.is_empty() {
-                    cmds.extend(cut_commands(project, &cid, &cuts));
+                    let info = effective_clip_info(project, &ensured_id, ctx);
+                    cmds.extend(cut_commands(project, &cid, &cuts, info));
                 }
                 app.summary_parts.push(format!("Kept {} ranges", ranges.len()));
             }
             Operation::SetTargetDuration { seconds, selection } => {
-                let cid = ensure_clip(project, &mut cmds, &mut clip_created, ctx);
+                let cid = ensure_clip_memo(project, &mut cmds, &mut clip_created, ctx, &mut ensured_id);
                 let target_ms = s_to_ms(*seconds);
                 let cur_ms = clip_len(project, &cid).unwrap_or(0);
                 if cur_ms > target_ms {
@@ -113,7 +120,8 @@ pub fn plan_to_commands(
                         cuts.push((cursor, cur_ms));
                     }
                     if !cuts.is_empty() {
-                        cmds.extend(cut_commands(project, &cid, &cuts));
+                        let info = effective_clip_info(project, &ensured_id, ctx);
+                        cmds.extend(cut_commands(project, &cid, &cuts, info));
                     }
                     app.summary_parts.push(format!("Trimmed to {seconds:.0}s ({selection:?})"));
                 } else {
@@ -121,7 +129,7 @@ pub fn plan_to_commands(
                 }
             }
             Operation::AddEffect { effect, start, end, params, .. } => {
-                let cid = ensure_clip(project, &mut cmds, &mut clip_created, ctx);
+                let cid = ensure_clip_memo(project, &mut cmds, &mut clip_created, ctx, &mut ensured_id);
                 let def_id = effect_def_id(effect);
                 let mut pmap = std::collections::BTreeMap::new();
                 for (k, v) in params {
@@ -177,6 +185,7 @@ pub fn plan_to_commands(
                 app.summary_parts.push("Applied color grade".into());
             }
             Operation::SetAspect { ratio, reframe } => {
+                planned_ratio = Some(crate::validate::ratio_to_aspect(*ratio));
                 cmds.push(Command::SetReframe {
                     settings: Some(mycut_core::ReframeSettings {
                         ratio: crate::validate::ratio_to_aspect(*ratio),
@@ -329,7 +338,7 @@ pub fn plan_to_commands(
                 app.summary_parts.push("Adjusted audio".into());
             }
             Operation::SetSpeed { start, end, speed } => {
-                let cid = ensure_clip(project, &mut cmds, &mut clip_created, ctx);
+                let cid = ensure_clip_memo(project, &mut cmds, &mut clip_created, ctx, &mut ensured_id);
                 let (in_ms, out_ms) = clip_range(project, &cid);
                 let s_ms = s_to_ms(*start).max(in_ms);
                 let e_ms = s_to_ms(*end).min(out_ms);
@@ -358,7 +367,7 @@ pub fn plan_to_commands(
                 cmds.push(Command::AddMarker { time_ms: s_to_ms(*time), label: label.clone() });
             }
             Operation::SetExportPreset { preset } => {
-                if let Some(p) = preset_settings(preset, project) {
+                if let Some(p) = preset_settings(preset, project, planned_ratio) {
                     cmds.push(Command::SetExport { settings: p });
                     app.summary_parts.push(format!("Export preset: {preset:?}"));
                 }
@@ -374,7 +383,11 @@ pub fn plan_to_commands(
     Ok(app)
 }
 
-fn preset_settings(preset: &PresetId, project: &Project) -> Option<mycut_core::ExportSettings> {
+fn preset_settings(
+    preset: &PresetId,
+    project: &Project,
+    planned_ratio: Option<mycut_core::AspectRatio>,
+) -> Option<mycut_core::ExportSettings> {
     let id = match preset {
         PresetId::Youtube => "youtube",
         PresetId::YoutubeShorts => "youtube_shorts",
@@ -386,9 +399,11 @@ fn preset_settings(preset: &PresetId, project: &Project) -> Option<mycut_core::E
     };
     let presets = mycut_engine::preset::builtin_presets();
     let mut s = presets.iter().find(|p| p.id == id)?.settings.clone();
-    // Keep timeline-derived duration untouched; adjust dims to reframe ratio.
-    if let Some(r) = &project.reframe {
-        let (w, h) = mycut_engine::preset::dimensions_for(r.ratio, 1920, 1080);
+    // Keep timeline-derived duration untouched; adjust dims to reframe ratio
+    // (live project or ratio planned earlier in this same plan).
+    let ratio = planned_ratio.or_else(|| project.reframe.as_ref().map(|r| r.ratio));
+    if let Some(ratio) = ratio {
+        let (w, h) = mycut_engine::preset::dimensions_for(ratio, 1920, 1080);
         s.width = w;
         s.height = h;
     }
@@ -476,6 +491,21 @@ fn primary_clip_id(project: &Project) -> Option<String> {
         .map(|i| i.id.clone())
 }
 
+fn ensure_clip_memo(
+    project: &Project,
+    cmds: &mut Vec<Command>,
+    created: &mut bool,
+    ctx: &PlanContext,
+    memo: &mut Option<String>,
+) -> String {
+    if let Some(id) = memo {
+        return id.clone();
+    }
+    let id = ensure_clip(project, cmds, created, ctx);
+    *memo = Some(id.clone());
+    id
+}
+
 fn ensure_clip(
     project: &Project,
     cmds: &mut Vec<Command>,
@@ -527,20 +557,48 @@ fn clip_len(project: &Project, cid: &str) -> Option<TimeMs> {
 
 /// Build commands that remove `cuts` from the clip: trim the primary to the
 /// first keep-segment and insert the rest as new clips (timeline-compacted).
-fn cut_commands(project: &Project, cid: &str, cuts: &[(TimeMs, TimeMs)]) -> Vec<Command> {
+/// The clip range as it WILL be after the pending transaction: from the
+/// live project, or the planned full-source range when the clip is created
+/// by this same plan.
+struct ClipInfo {
+    range: (TimeMs, TimeMs),
+    source_id: String,
+}
+
+fn effective_clip_info(
+    project: &Project,
+    memo: &Option<String>,
+    ctx: &PlanContext,
+) -> ClipInfo {
+    if let Some(cid) = memo {
+        if let Some(item) = project.tracks.iter().flat_map(|t| t.items.iter()).find(|i| i.id == *cid) {
+            if let ItemKind::VideoClip { source_id, source_in_ms, source_out_ms, .. } = &item.kind {
+                return ClipInfo {
+                    range: (*source_in_ms, *source_out_ms),
+                    source_id: source_id.clone(),
+                };
+            }
+        }
+    }
+    ClipInfo {
+        range: (0, s_to_ms(ctx.source_duration_s)),
+        source_id: project.sources.first().map(|s| s.id.clone()).unwrap_or_default(),
+    }
+}
+
+fn cut_commands(
+    project: &Project,
+    cid: &str,
+    cuts: &[(TimeMs, TimeMs)],
+    info: ClipInfo,
+) -> Vec<Command> {
     let mut cmds = Vec::new();
-    let Some((in_ms, out_ms)) = (project
-        .tracks
-        .iter()
-        .flat_map(|t| t.items.iter())
-        .find(|i| i.id == cid)
-        .and_then(|i| match &i.kind {
-            ItemKind::VideoClip { source_in_ms, source_out_ms, .. } => Some((*source_in_ms, *source_out_ms)),
-            _ => None,
-        })) else {
+    let (in_ms, out_ms) = info.range;
+    if out_ms <= in_ms {
         return cmds;
-    };
-    // Build keep segments within [in_ms, out_ms].
+    }
+    // Build keep segments within the clip range.
+    // NOTE: `info` reflects the post-transaction range (live or planned).
     let mut sorted: Vec<(TimeMs, TimeMs)> = cuts.to_vec();
     sorted.sort();
     let mut keeps: Vec<(TimeMs, TimeMs)> = Vec::new();
@@ -572,16 +630,7 @@ fn cut_commands(project: &Project, cid: &str, cuts: &[(TimeMs, TimeMs)]) -> Vec<
         let len = e - s;
         let item = Item::new(
             ItemKind::VideoClip {
-                source_id: project
-                    .tracks
-                    .iter()
-                    .flat_map(|t| t.items.iter())
-                    .find(|i| i.id == cid)
-                    .map(|i| match &i.kind {
-                        ItemKind::VideoClip { source_id, .. } => source_id.clone(),
-                        _ => String::new(),
-                    })
-                    .unwrap_or_default(),
+                source_id: info.source_id.clone(),
                 source_in_ms: *s,
                 source_out_ms: *e,
                 speed: 1.0,
@@ -612,6 +661,9 @@ fn tl_for_src(project: &Project, cid: &str, src_ms: TimeMs) -> TimeMs {
 
 // Re-export for the CLI/app layers.
 pub use crate::validate::ValidationResult;
+
+#[allow(unused)]
+fn _suppress(_p: &Project) {}
 
 #[allow(unused_imports)]
 use PlanError as _PlanErrorImport;

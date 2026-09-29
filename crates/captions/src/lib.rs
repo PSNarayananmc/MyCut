@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use mycut_core::{CaptionEntry, CaptionStyle, CaptionWord, TimeMs};
 
+pub mod transcribe;
+pub use transcribe::{Transcriber, TranscriberConfig, TranscribeError, WhisperCppTranscriber};
+
 /// A transcription segment/word with times (TIMELINE-domain ms here; the
 /// transcription layer maps source→timeline before calling us).
 #[derive(Debug, Clone, Serialize, Deserialize)]
