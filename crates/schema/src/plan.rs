@@ -39,16 +39,35 @@ pub enum OpMode {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum EffectId {
-    Zoom, ZoomPunch, Shake, Blur, MotionBlur, Sharpen,
-    Vignette, Glow, RgbSplit, Grain, Pixelate, FreezeFrame,
-    Flash, CinematicBars, Fisheye,
+    Zoom,
+    ZoomPunch,
+    Shake,
+    Blur,
+    MotionBlur,
+    Sharpen,
+    Vignette,
+    Glow,
+    RgbSplit,
+    Grain,
+    Pixelate,
+    FreezeFrame,
+    Flash,
+    CinematicBars,
+    Fisheye,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ColorParam {
-    Exposure, Contrast, Saturation, Vibrance, Temperature,
-    Gamma, Shadows, Highlights, LutIntensity,
+    Exposure,
+    Contrast,
+    Saturation,
+    Vibrance,
+    Temperature,
+    Gamma,
+    Shadows,
+    Highlights,
+    LutIntensity,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -62,7 +81,15 @@ pub enum ReframeMode {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptionStyleId {
-    Minimal, Gaming, Tiktok, Youtube, Cinematic, Bold, Karaoke, WordHighlight, Streamer,
+    Minimal,
+    Gaming,
+    Tiktok,
+    Youtube,
+    Cinematic,
+    Bold,
+    Karaoke,
+    WordHighlight,
+    Streamer,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -76,25 +103,49 @@ pub enum SafeArea {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum TransitionId {
-    Cut, Fade, Crossfade, DipToBlack, DipToWhite, Slide, Push, Zoom, Blur, Wipe,
+    Cut,
+    Fade,
+    Crossfade,
+    DipToBlack,
+    DipToWhite,
+    Slide,
+    Push,
+    Zoom,
+    Blur,
+    Wipe,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum TextKindId {
-    Title, LowerThird, Callout, Watermark,
+    Title,
+    LowerThird,
+    Callout,
+    Watermark,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum PositionId {
-    TopLeft, TopRight, BottomLeft, BottomRight, Center, TopCenter, BottomCenter,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+    Center,
+    TopCenter,
+    BottomCenter,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum PresetId {
-    Youtube, YoutubeShorts, InstagramReels, Tiktok, Discord, TwitterX, Custom,
+    Youtube,
+    YoutubeShorts,
+    InstagramReels,
+    Tiktok,
+    Discord,
+    TwitterX,
+    Custom,
 }
 
 /// Color parameters (lut is a validated path string).
@@ -308,7 +359,13 @@ pub enum PlanError {
     #[error("{op}: {reason}")]
     Invalid { op: String, reason: String },
     #[error("{op}: {field}={value} out of range [{min}, {max}]")]
-    OutOfRange { op: String, field: String, value: f64, min: f64, max: f64 },
+    OutOfRange {
+        op: String,
+        field: String,
+        value: f64,
+        min: f64,
+        max: f64,
+    },
     #[error("{op}: unsafe path {path:?}")]
     UnsafePath { op: String, path: String },
     #[error("range {0}-{1} invalid or outside source")]

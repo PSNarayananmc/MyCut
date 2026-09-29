@@ -8,8 +8,8 @@ use mycut_schema::apply::plan_to_commands;
 use mycut_schema::validate::PlanContext;
 use mycut_schema::EditPlan;
 
-use crate::provider::{AIProvider, AiError, ChatMessage, PlanRequest};
 use crate::prompt::{build_messages, system_prompt, ContextSummary};
+use crate::provider::{AIProvider, AiError, ChatMessage, PlanRequest};
 
 /// Max correction attempts after the initial request (spec: at most 2).
 pub const MAX_REPAIRS: u32 = 2;
@@ -50,7 +50,11 @@ pub fn plan_and_apply(
     let req = PlanRequest {
         system_prompt: system_prompt(),
         messages: convo.clone(),
-        json_schema: if caps.structured_output { Some(schema) } else { None },
+        json_schema: if caps.structured_output {
+            Some(schema)
+        } else {
+            None
+        },
         max_tokens: 4096,
         temperature: 0.2,
     };

@@ -63,7 +63,9 @@ impl RenderEngine {
     /// [`EngineError::ToolNotFound`] when ffmpeg is absent.
     pub fn new() -> Result<Self, EngineError> {
         let path = crate::process::resolve_tool("ffmpeg")?;
-        Ok(Self { ffmpeg: path.to_string_lossy().into_owned() })
+        Ok(Self {
+            ffmpeg: path.to_string_lossy().into_owned(),
+        })
     }
 
     /// Build the final-export command for a project.
@@ -82,7 +84,10 @@ impl RenderEngine {
             return Err(EngineError::Tool("timeline has no video clips".into()));
         }
         let export = &project.export;
-        let (out_w, out_h) = (export.width.max(2) - (export.width.max(2) % 2), export.height.max(2) - (export.height.max(2) % 2));
+        let (out_w, out_h) = (
+            export.width.max(2) - (export.width.max(2) % 2),
+            export.height.max(2) - (export.height.max(2) % 2),
+        );
         let fps = export.fps.max(1.0);
 
         // LUT jail: project dir + app-data LUT dir (env override for tests).
@@ -174,7 +179,7 @@ impl RenderEngine {
         // ---- extra audio inputs (AudioClip items on audio track) ----
         let audio_items = self.audio_items(project);
         let video_input_count = video_items.len();
-        for (k, item) in audio_items.iter().enumerate() {
+        for item in audio_items.iter() {
             let (source_id, _in, _out, _speed) = clip_range(&item.kind);
             let source = project
                 .source(&source_id)
@@ -182,25 +187,24 @@ impl RenderEngine {
             let media = crate::pathing::resolve_in_project(project_dir, &source.rel_path)?;
             args.push("-i".into());
             args.push(media.to_string_lossy().into_owned());
-            let _ = video_input_count; // input index computed below at use site
         }
 
         // ---- video composition: concat (cuts) or xfade chain ----
         let n = video_items.len();
         let transitions = transition_slots(project, n);
-        let any_xfade = transitions.iter().any(|t| t.map(|t| t.1).is_some());
-        let all_xfade = n > 1
-            && transitions.iter().all(|t| matches!(t, Some((_, Some(_)), ..)));
-        let video_graph: String;
+        let any_xfade = transitions.iter().any(|slot| slot.map(|t| t.1).is_some());
+        let all_xfade = n > 1 && transitions.iter().all(|slot| matches!(slot, Some((_, Some(_)))));
         let composed_label = "vcomp";
-        if n == 1 {
-            video_graph = format!("[v0]format=yuv420p[{composed_label}];");
+        let video_graph: String = if n == 1 {
+            format!("[v0]format=yuv420p[{composed_label}];")
         } else if all_xfade {
             let mut g = String::new();
             let mut cur = "v0".to_string();
             let mut composite_dur = piece_durations[0];
             for i in 1..n {
-                let Some((dur_ms, Some(name))) = transitions[i - 1] else { continue };
+                let Some((dur_ms, Some(name))) = transitions[i - 1] else {
+                    continue;
+                };
                 let d = (dur_ms as f64 / 1000.0).clamp(0.05, 3.0);
                 let offset = (composite_dur - d).max(0.0);
                 let outl = format!("vx{i}");
@@ -210,22 +214,22 @@ impl RenderEngine {
                 cur = outl;
                 composite_dur = offset + piece_durations[i];
             }
-            video_graph = format!("{g}[{cur}]format=yuv420p[{composed_label}];");
+            format!("{g}[{cur}]format=yuv420p[{composed_label}];")
         } else if !any_xfade {
             let inputs: Vec<&str> = piece_labels.iter().map(|s| s.as_str()).collect();
-            video_graph = format!(
+            format!(
                 "[{}]concat=n={n}:v=1:a=0[{composed_label}];",
                 inputs.join("][")
-            );
+            )
         } else {
             // Mixed xfade/cut: honest fallback to cuts (recorded in plan report
             // by the planner layer); cut joins are still correct.
             let inputs: Vec<&str> = piece_labels.iter().map(|s| s.as_str()).collect();
-            video_graph = format!(
+            format!(
                 "[{}]concat=n={n}:v=1:a=0[{composed_label}];",
                 inputs.join("][")
-            );
-        }
+            )
+        };
 
         // ---- post-composition: captions + text (TIMELINE domain) ----
         let mut post: Vec<String> = Vec::new();
@@ -241,7 +245,11 @@ impl RenderEngine {
                 post.push(frag);
             }
         }
-        let final_label = if post.is_empty() { composed_label.to_string() } else { "voutx".to_string() };
+        let final_label = if post.is_empty() {
+            composed_label.to_string()
+        } else {
+            "voutx".to_string()
+        };
 
         // ---- audio graph ----
         let mut audio_graph = String::new();
@@ -251,9 +259,9 @@ impl RenderEngine {
                 continue;
             }
             let (source_id, _in, _out, speed) = clip_range(&item.kind);
-            let source = project.source(&source_id).ok_or_else(|| {
-                EngineError::Tool(format!("missing source {source_id}"))
-            })?;
+            let source = project
+                .source(&source_id)
+                .ok_or_else(|| EngineError::Tool(format!("missing source {source_id}")))?;
             let mut a: Vec<String> = Vec::new();
             if (speed - 1.0).abs() > 0.001 {
                 a.extend(atempo_chain(speed));
@@ -334,8 +342,7 @@ impl RenderEngine {
                     audio_graph.push_str(&format!("[duckmx]{master_chain}[aout];"));
                 }
             } else {
-                let inputs: Vec<&str> =
-                    audio_specs.iter().map(|(l, _)| l.as_str()).collect();
+                let inputs: Vec<&str> = audio_specs.iter().map(|(l, _)| l.as_str()).collect();
                 if inputs.len() == 1 {
                     audio_graph.push_str(&format!("[{}]anull[amixpre];", inputs[0]));
                 } else {
@@ -361,7 +368,10 @@ impl RenderEngine {
         }
         fg.push_str(&video_graph);
         if !post.is_empty() {
-            fg.push_str(&format!("[{composed_label}]{}[{final_label}];", post.join(",")));
+            fg.push_str(&format!(
+                "[{composed_label}]{}[{final_label}];",
+                post.join(",")
+            ));
         }
         if has_audio {
             fg.push_str(&audio_graph);
@@ -390,15 +400,25 @@ impl RenderEngine {
         match eff_hw {
             HwChoice::Nvenc => {
                 args.extend([
-                    "-c:v".into(), "h264_nvenc".into(),
-                    "-preset".into(), "p4".into(),
-                    "-rc".into(), "vbr".into(),
-                    "-cq".into(), format!("{q}"),
-                    "-b:v".into(), "0".into(),
+                    "-c:v".into(),
+                    "h264_nvenc".into(),
+                    "-preset".into(),
+                    "p4".into(),
+                    "-rc".into(),
+                    "vbr".into(),
+                    "-cq".into(),
+                    format!("{q}"),
+                    "-b:v".into(),
+                    "0".into(),
                 ]);
             }
             HwChoice::Qsv => {
-                args.extend(["-c:v".into(), "h264_qsv".into(), "-global_quality".into(), format!("{q}")]);
+                args.extend([
+                    "-c:v".into(),
+                    "h264_qsv".into(),
+                    "-global_quality".into(),
+                    format!("{q}"),
+                ]);
             }
             HwChoice::Vaapi => {
                 vaapi = true;
@@ -406,13 +426,21 @@ impl RenderEngine {
                 if let Some(pos) = find_arg(&args, "-filter_complex") {
                     args[pos + 1] = format!("{},format=nv12,hwupload", args[pos + 1]);
                 }
-                args.extend(["-c:v".into(), "h264_vaapi".into(), "-global_quality".into(), format!("{q}")]);
+                args.extend([
+                    "-c:v".into(),
+                    "h264_vaapi".into(),
+                    "-global_quality".into(),
+                    format!("{q}"),
+                ]);
             }
             _ => {
                 args.extend([
-                    "-c:v".into(), "libx264".into(),
-                    "-preset".into(), "veryfast".into(),
-                    "-crf".into(), format!("{q}"),
+                    "-c:v".into(),
+                    "libx264".into(),
+                    "-preset".into(),
+                    "veryfast".into(),
+                    "-crf".into(),
+                    format!("{q}"),
                 ]);
             }
         }
@@ -434,75 +462,137 @@ impl RenderEngine {
             args.push("+faststart".into());
         }
         args.push(out_path.to_string_lossy().into_owned());
-        Ok(FfmpegGraph { program: self.ffmpeg.clone(), args, filtergraph: fg })
+        Ok(FfmpegGraph {
+            program: self.ffmpeg.clone(),
+            args,
+            filtergraph: fg,
+        })
     }
 
     /// Proxy render command (throwaway preview file).
     ///
     /// # Errors
     /// [`EngineError`] on tool resolution failure.
-    pub fn build_proxy_command(&self, media: &Path, out: &Path, height: u32) -> Result<FfmpegGraph, EngineError> {
+    pub fn build_proxy_command(
+        &self,
+        media: &Path,
+        out: &Path,
+        height: u32,
+    ) -> Result<FfmpegGraph, EngineError> {
         let args = vec![
-            "-hide_banner".into(), "-y".into(),
-            "-i".into(), media.to_string_lossy().into_owned(),
-            "-vf".into(), format!("scale=-2:{height}"),
-            "-c:v".into(), "libx264".into(),
-            "-preset".into(), "ultrafast".into(),
-            "-tune".into(), "fastdecode".into(),
-            "-crf".into(), "28".into(),
-            "-c:a".into(), "aac".into(),
-            "-b:a".into(), "96k".into(),
-            "-movflags".into(), "+faststart".into(),
+            "-hide_banner".into(),
+            "-y".into(),
+            "-i".into(),
+            media.to_string_lossy().into_owned(),
+            "-vf".into(),
+            format!("scale=-2:{height}"),
+            "-c:v".into(),
+            "libx264".into(),
+            "-preset".into(),
+            "ultrafast".into(),
+            "-tune".into(),
+            "fastdecode".into(),
+            "-crf".into(),
+            "28".into(),
+            "-c:a".into(),
+            "aac".into(),
+            "-b:a".into(),
+            "96k".into(),
+            "-movflags".into(),
+            "+faststart".into(),
             out.to_string_lossy().into_owned(),
         ];
-        Ok(FfmpegGraph { program: self.ffmpeg.clone(), args, filtergraph: format!("scale=-2:{height}") })
+        Ok(FfmpegGraph {
+            program: self.ffmpeg.clone(),
+            args,
+            filtergraph: format!("scale=-2:{height}"),
+        })
     }
 
     /// Thumbnail command at source time `t_ms`.
     ///
     /// # Errors
     /// [`EngineError`] on tool resolution failure.
-    pub fn build_thumbnail_command(&self, media: &Path, t_ms: TimeMs, out: &Path, width: u32) -> Result<FfmpegGraph, EngineError> {
+    pub fn build_thumbnail_command(
+        &self,
+        media: &Path,
+        t_ms: TimeMs,
+        out: &Path,
+        width: u32,
+    ) -> Result<FfmpegGraph, EngineError> {
         let args = vec![
-            "-hide_banner".into(), "-y".into(),
-            "-ss".into(), fmt_secs(t_ms.max(0)),
-            "-i".into(), media.to_string_lossy().into_owned(),
-            "-frames:v".into(), "1".into(),
-            "-vf".into(), format!("scale={width}:-2"),
-            "-q:v".into(), "3".into(),
+            "-hide_banner".into(),
+            "-y".into(),
+            "-ss".into(),
+            fmt_secs(t_ms.max(0)),
+            "-i".into(),
+            media.to_string_lossy().into_owned(),
+            "-frames:v".into(),
+            "1".into(),
+            "-vf".into(),
+            format!("scale={width}:-2"),
+            "-q:v".into(),
+            "3".into(),
             out.to_string_lossy().into_owned(),
         ];
-        Ok(FfmpegGraph { program: self.ffmpeg.clone(), args, filtergraph: String::new() })
+        Ok(FfmpegGraph {
+            program: self.ffmpeg.clone(),
+            args,
+            filtergraph: String::new(),
+        })
     }
 
     fn video_items<'a>(&self, project: &'a Project) -> Vec<&'a Item> {
         project
             .track_of_kind(mycut_core::TrackKind::Video)
-            .map(|t| t.items.iter().filter(|i| matches!(i.kind, ItemKind::VideoClip { .. })).collect())
+            .map(|t| {
+                t.items
+                    .iter()
+                    .filter(|i| matches!(i.kind, ItemKind::VideoClip { .. }))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
     fn audio_items<'a>(&self, project: &'a Project) -> Vec<&'a Item> {
         project
             .track_of_kind(mycut_core::TrackKind::Audio)
-            .map(|t| t.items.iter().filter(|i| matches!(i.kind, ItemKind::AudioClip { .. })).collect())
+            .map(|t| {
+                t.items
+                    .iter()
+                    .filter(|i| matches!(i.kind, ItemKind::AudioClip { .. }))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
     fn text_items<'a>(&self, project: &'a Project) -> Vec<&'a Item> {
         project
             .track_of_kind(mycut_core::TrackKind::Text)
-            .map(|t| t.items.iter().filter(|i| matches!(i.kind, ItemKind::Text { .. })).collect())
+            .map(|t| {
+                t.items
+                    .iter()
+                    .filter(|i| matches!(i.kind, ItemKind::Text { .. }))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 }
 
 fn clip_range(kind: &ItemKind) -> (String, TimeMs, TimeMs, f64) {
     match kind {
-        ItemKind::VideoClip { source_id, source_in_ms, source_out_ms, speed }
-        | ItemKind::AudioClip { source_id, source_in_ms, source_out_ms, speed } => {
-            (source_id.clone(), *source_in_ms, *source_out_ms, *speed)
+        ItemKind::VideoClip {
+            source_id,
+            source_in_ms,
+            source_out_ms,
+            speed,
         }
+        | ItemKind::AudioClip {
+            source_id,
+            source_in_ms,
+            source_out_ms,
+            speed,
+        } => (source_id.clone(), *source_in_ms, *source_out_ms, *speed),
         _ => (String::new(), 0, 0, 1.0),
     }
 }
@@ -532,7 +622,10 @@ fn find_arg(args: &[String], name: &str) -> Option<usize> {
 /// Transition slots between consecutive video items (length n-1):
 /// `Some((duration_ms, xfade_name))`; `None` = plain cut.
 #[must_use]
-pub fn transition_slots(project: &Project, n: usize) -> Vec<Option<(TimeMs, Option<&'static str>)>> {
+pub fn transition_slots(
+    project: &Project,
+    n: usize,
+) -> Vec<Option<(TimeMs, Option<&'static str>)>> {
     if n < 2 {
         return Vec::new();
     }
@@ -548,16 +641,15 @@ pub fn transition_slots(project: &Project, n: usize) -> Vec<Option<(TimeMs, Opti
 }
 
 /// LUT jail closure: LUT paths must stay inside project dir or allowed roots.
-fn lut_jail<'a>(
-    _project_dir: &Path,
-    roots: &'a [PathBuf],
-) -> impl Fn(&str) -> bool + 'a {
+fn lut_jail<'a>(_project_dir: &Path, roots: &'a [PathBuf]) -> impl Fn(&str) -> bool + 'a {
     move |p: &str| {
         if p.split('/').any(|seg| seg == "..") {
             return false;
         }
         let path = PathBuf::from(p);
-        roots.iter().any(|root| path.starts_with(root) || root.join(&path).exists())
+        roots
+            .iter()
+            .any(|root| path.starts_with(root) || root.join(&path).exists())
     }
 }
 
@@ -631,11 +723,18 @@ pub fn crop_center_keyframed(
     let max_x = (src_w - crop_w) as f64;
     let max_y = (src_h - crop_h) as f64;
     // Keyframes store CENTER x/y in source px; crop x/y is top-left.
-    let xs: Vec<(f64, f64)> =
-        kfx.into_iter().map(|(t, cx)| (t, (cx - f64::from(crop_w) / 2.0).clamp(0.0, max_x))).collect();
-    let ys: Vec<(f64, f64)> =
-        kfy.into_iter().map(|(t, cy)| (t, (cy - f64::from(crop_h) / 2.0).clamp(0.0, max_y))).collect();
-    (piecewise_expr(&xs, max_x / 2.0), piecewise_expr(&ys, max_y / 2.0))
+    let xs: Vec<(f64, f64)> = kfx
+        .into_iter()
+        .map(|(t, cx)| (t, (cx - f64::from(crop_w) / 2.0).clamp(0.0, max_x)))
+        .collect();
+    let ys: Vec<(f64, f64)> = kfy
+        .into_iter()
+        .map(|(t, cy)| (t, (cy - f64::from(crop_h) / 2.0).clamp(0.0, max_y)))
+        .collect();
+    (
+        piecewise_expr(&xs, max_x / 2.0),
+        piecewise_expr(&ys, max_y / 2.0),
+    )
 }
 
 /// Nested `if(lt(t,...))` piecewise-linear expression (≤120 samples).
@@ -649,7 +748,9 @@ pub fn piecewise_expr(points: &[(f64, f64)], fallback: f64) -> String {
     }
     let pts: Vec<(f64, f64)> = if points.len() > 120 {
         let step = points.len() as f64 / 120.0;
-        (0..120).map(|i| points[((i as f64) * step) as usize]).collect()
+        (0..120)
+            .map(|i| points[((i as f64) * step) as usize])
+            .collect()
     } else {
         points.to_vec()
     };
@@ -667,15 +768,25 @@ pub fn piecewise_expr(points: &[(f64, f64)], fallback: f64) -> String {
     expr
 }
 
-fn text_param(params: &std::collections::BTreeMap<String, ParamValue>, key: &str) -> Option<String> {
+fn text_param(
+    params: &std::collections::BTreeMap<String, ParamValue>,
+    key: &str,
+) -> Option<String> {
     params.get(key).and_then(|v| match v {
         ParamValue::Text(t) => Some(t.clone()),
         ParamValue::Number(_) => None,
     })
 }
 
-fn drawtext_fragment(item: &Item, out_w: u32, out_h: u32) -> String {
-    let ItemKind::Text { kind, text, position, scale, opacity } = &item.kind else {
+fn drawtext_fragment(item: &Item, _out_w: u32, out_h: u32) -> String {
+    let ItemKind::Text {
+        kind,
+        text,
+        position,
+        scale,
+        opacity,
+    } = &item.kind
+    else {
         return String::new();
     };
     let base = match kind {
@@ -708,7 +819,11 @@ fn drawtext_fragment(item: &Item, out_w: u32, out_h: u32) -> String {
 pub fn captions_entries(project: &Project) -> Option<Vec<mycut_core::CaptionEntry>> {
     project
         .track_of_kind(mycut_core::TrackKind::Captions)
-        .and_then(|t| t.items.iter().find(|i| matches!(i.kind, ItemKind::Captions { .. })))
+        .and_then(|t| {
+            t.items
+                .iter()
+                .find(|i| matches!(i.kind, ItemKind::Captions { .. }))
+        })
         .map(|i| match &i.kind {
             ItemKind::Captions { entries, .. } => entries.clone(),
             _ => Vec::new(),
@@ -726,11 +841,17 @@ pub fn summarize_probe(p: &ProbeResult) -> std::collections::BTreeMap<String, St
     m.insert("fps".into(), format!("{fn_}/{fd}"));
     m.insert("has_audio".into(), p.has_audio().to_string());
     if let Some(v) = p.video_stream() {
-        m.insert("video_codec".into(), v.codec_name.clone().unwrap_or_default());
+        m.insert(
+            "video_codec".into(),
+            v.codec_name.clone().unwrap_or_default(),
+        );
         m.insert("pix_fmt".into(), v.pix_fmt.clone().unwrap_or_default());
     }
     if let Some(a) = p.audio_stream() {
-        m.insert("audio_codec".into(), a.codec_name.clone().unwrap_or_default());
+        m.insert(
+            "audio_codec".into(),
+            a.codec_name.clone().unwrap_or_default(),
+        );
     }
     m
 }

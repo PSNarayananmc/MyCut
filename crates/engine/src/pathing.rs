@@ -21,7 +21,9 @@ pub fn resolve_in_project(project_dir: &Path, rel: &str) -> Result<PathBuf, Engi
         return check_canonical(project_dir, p);
     }
     if p.components().any(|c| matches!(c, Component::ParentDir)) {
-        return Err(EngineError::UnsafePath(format!("`..` component rejected: {rel}")));
+        return Err(EngineError::UnsafePath(format!(
+            "`..` component rejected: {rel}"
+        )));
     }
     let joined = project_dir.join(p);
     check_canonical(project_dir, &joined)

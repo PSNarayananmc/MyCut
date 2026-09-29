@@ -76,7 +76,11 @@ pub trait AIProvider: Send + Sync {
     ///
     /// # Errors
     /// [`AiError`] states surfaced verbatim to the UI.
-    fn complete(&self, req: &PlanRequest, cancel: &std::sync::atomic::AtomicBool) -> Result<PlanResponse, AiError>;
+    fn complete(
+        &self,
+        req: &PlanRequest,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<PlanResponse, AiError>;
 }
 
 #[derive(Debug, Clone)]
@@ -118,7 +122,12 @@ impl NvidiaNimProvider {
             // Conservative default caps; `refresh_capabilities` can upgrade
             // after a probe. Structured output support is requested and
             // gracefully degraded (validation+repair) when absent.
-            caps: Caps { text: true, vision: false, structured_output: true, max_context: 8192 },
+            caps: Caps {
+                text: true,
+                vision: false,
+                structured_output: true,
+                max_context: 8192,
+            },
         }
     }
 
@@ -129,16 +138,18 @@ impl NvidiaNimProvider {
     }
 
     fn request_once(&self, req: &PlanRequest) -> Result<PlanResponse, (AiError, Option<u64>)> {
-        let agent = ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(self.cfg.timeout_secs))
-            .build();
-        let url = format!("{}/chat/completions", self.cfg.base_url.trim_end_matches('/'));
+        let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(self.cfg.timeout_secs)).build();
+        let url = format!(
+            "{}/chat/completions",
+            self.cfg.base_url.trim_end_matches('/')
+        );
         let mut body = serde_json::json!({
             "model": self.cfg.model,
-            "messages": req.messages.iter().map(|m| {
-                let mut o = serde_json::json!({"role": m.role, "content": m.content});
-                o
-            }).collect::<Vec<_>>(),
+            "messages": req
+                .messages
+                .iter()
+                .map(|m| serde_json::json!({"role": m.role, "content": m.content}))
+                .collect::<Vec<_>>(),
             "temperature": req.temperature,
             "max_tokens": req.max_tokens,
         });
@@ -157,7 +168,9 @@ impl NvidiaNimProvider {
             .send_json(body);
         match resp {
             Ok(r) => {
-                let parsed: serde_json::Value = r.into_json().map_err(|e| (AiError::Provider(e.to_string()), None))?;
+                let parsed: serde_json::Value = r
+                    .into_json()
+                    .map_err(|e| (AiError::Provider(e.to_string()), None))?;
                 let text = parsed["choices"][0]["message"]["content"]
                     .as_str()
                     .unwrap_or_default()
@@ -167,13 +180,12 @@ impl NvidiaNimProvider {
                     text,
                     model,
                     prompt_tokens: parsed["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32,
-                    completion_tokens: parsed["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32,
+                    completion_tokens: parsed["usage"]["completion_tokens"].as_u64().unwrap_or(0)
+                        as u32,
                 })
             }
             Err(ureq::Error::Status(code, r)) => {
-                let retry_after = r
-                    .header("Retry-After")
-                    .and_then(|v| v.parse::<u64>().ok());
+                let retry_after = r.header("Retry-After").and_then(|v| v.parse::<u64>().ok());
                 let err = match code {
                     401 | 403 => AiError::InvalidApiKey,
                     404 => AiError::ModelUnavailable,
@@ -206,7 +218,11 @@ impl AIProvider for NvidiaNimProvider {
         }
         let req = PlanRequest {
             system_prompt: "You are a health check. Reply with the single word: ok".into(),
-            messages: vec![ChatMessage { role: "user".into(), content: "ping".into(), image_url: None }],
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: "ping".into(),
+                image_url: None,
+            }],
             json_schema: None,
             max_tokens: 5,
             temperature: 0.0,
@@ -217,7 +233,11 @@ impl AIProvider for NvidiaNimProvider {
 
     /// # Errors
     /// [`AiError`] after retries are exhausted.
-    fn complete(&self, req: &PlanRequest, cancel: &std::sync::atomic::AtomicBool) -> Result<PlanResponse, AiError> {
+    fn complete(
+        &self,
+        req: &PlanRequest,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<PlanResponse, AiError> {
         let mut attempt = 0u32;
         loop {
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
@@ -225,7 +245,8 @@ impl AIProvider for NvidiaNimProvider {
             }
             match self.request_once(req) {
                 Ok(r) => return Ok(r),
-                Err((AiError::RateLimited, retry_after)) | Err((AiError::Provider(_), retry_after @ Some(_))) => {
+                Err((AiError::RateLimited, retry_after))
+                | Err((AiError::Provider(_), retry_after @ Some(_))) => {
                     if attempt >= self.cfg.max_retries {
                         return Err(AiError::RateLimited);
                     }
@@ -234,9 +255,14 @@ impl AIProvider for NvidiaNimProvider {
                         .map(|d| d.subsec_millis())
                         .unwrap_or(0)) as u64
                         % 100;
-                    let backoff = retry_after
-                        .map(|s| Duration::from_secs(s))
-                        .unwrap_or_else(|| Duration::from_millis(self.cfg.backoff_base_ms * (1u64 << attempt) + jitter));
+                    let backoff =
+                        retry_after
+                            .map(Duration::from_secs)
+                            .unwrap_or_else(|| {
+                                Duration::from_millis(
+                                    self.cfg.backoff_base_ms * (1u64 << attempt) + jitter,
+                                )
+                            });
                     std::thread::sleep(backoff.min(Duration::from_secs(30)));
                     attempt += 1;
                 }

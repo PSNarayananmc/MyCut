@@ -3,12 +3,11 @@
 //! GUI, and produces evidence for docs/PERFORMANCE.md and STATUS.md.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
 
 use mycut_analysis as analysis;
-use mycut_captions::{segment, to_ass, style_for, SegmentOptions, TimedWord};
+use mycut_captions::{segment, style_for, to_ass, SegmentOptions, TimedWord};
 use mycut_core::{Command, History, Item, ItemKind, MediaRole, Project, Source, TrackKind};
-use mycut_engine::{RenderEngine, HwChoice};
+use mycut_engine::{HwChoice, RenderEngine};
 use mycut_projects as projects;
 use mycut_schema::apply::plan_to_commands;
 use mycut_schema::EditPlan;
@@ -40,7 +39,14 @@ fn cmd_analyze(path: Option<&str>) {
     let t0 = std::time::Instant::now();
     let cancel = mycut_engine::process::new_cancel();
     let params = analysis::adaptive_params(0, false);
-    let r = analysis::analyze(&media, &PathBuf::from("cache"), 1024 * 1024 * 1024, &params, &cancel, None);
+    let r = analysis::analyze(
+        &media,
+        &PathBuf::from("cache"),
+        1024 * 1024 * 1024,
+        &params,
+        &cancel,
+        None,
+    );
     match r {
         Ok(a) => {
             println!("{}", serde_json::to_string_pretty(&a).unwrap());
@@ -64,19 +70,28 @@ fn run_apply(project_path: &Path, plan_str: &str) {
     let mut doc = projects::load_project(project_path).expect("load project");
     let plan = EditPlan::parse(plan_str).expect("parse plan");
     let ctx = mycut_schema::validate::PlanContext {
-        source_duration_s: doc.project.sources.first().map(|s| s.duration_ms as f64 / 1000.0).unwrap_or(0.0),
+        source_duration_s: doc
+            .project
+            .sources
+            .first()
+            .map(|s| s.duration_ms as f64 / 1000.0)
+            .unwrap_or(0.0),
         transcript: Vec::new(),
         highlights: Vec::new(),
         allowed_dirs: vec![],
     };
-    let app = plan_to_commands(&plan, &mut doc.project, &mut doc.history, &ctx).expect("apply plan");
+    let app =
+        plan_to_commands(&plan, &mut doc.project, &mut doc.history, &ctx).expect("apply plan");
     projects::save_project(&doc.project, &doc.history, project_path).expect("save");
-    println!("{}", serde_json::json!({
-        "applied": true,
-        "summary": app.summary_parts,
-        "warnings": app.warnings,
-        "repairs": app.repairs,
-    }));
+    println!(
+        "{}",
+        serde_json::json!({
+            "applied": true,
+            "summary": app.summary_parts,
+            "warnings": app.warnings,
+            "repairs": app.repairs,
+        })
+    );
 }
 
 fn cmd_render(rest: &[String]) {
@@ -94,8 +109,15 @@ fn render_project(project_path: &Path, out: &Path) {
             let cap_style = doc
                 .project
                 .track_of_kind(TrackKind::Captions)
-                .and_then(|t| t.items.iter().find(|i| matches!(i.kind, ItemKind::Captions { .. })))
-                .map(|i| match &i.kind { ItemKind::Captions { style, .. } => *style, _ => mycut_core::CaptionStyle::Minimal })
+                .and_then(|t| {
+                    t.items
+                        .iter()
+                        .find(|i| matches!(i.kind, ItemKind::Captions { .. }))
+                })
+                .map(|i| match &i.kind {
+                    ItemKind::Captions { style, .. } => *style,
+                    _ => mycut_core::CaptionStyle::Minimal,
+                })
                 .unwrap_or(mycut_core::CaptionStyle::Minimal);
             let style = style_for(cap_style);
             let (w, h) = (doc.project.export.width, doc.project.export.height);
@@ -112,11 +134,14 @@ fn render_project(project_path: &Path, out: &Path) {
     let res = mycut_engine::process::run_tool(&graph.program, &graph.args, cancel);
     match res {
         Ok(_) => {
-            println!("{}", serde_json::json!({
-                "rendered": out.to_string_lossy(),
-                "seconds": t0.elapsed().as_secs_f64(),
-                "real_encoder": format!("{:?}", mycut_engine::render::auto_hw()),
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "rendered": out.to_string_lossy(),
+                    "seconds": t0.elapsed().as_secs_f64(),
+                    "real_encoder": format!("{:?}", mycut_engine::render::auto_hw()),
+                })
+            );
         }
         Err(e) => {
             eprintln!("render failed: {e}");
@@ -128,7 +153,9 @@ fn render_project(project_path: &Path, out: &Path) {
 /// Full pipeline with a generated fixture. This is the E2E evidence used in
 /// CI and the final report (GUI-free path).
 fn e2e(arg: Option<&str>) {
-    let workdir: PathBuf = arg.map(PathBuf::from).unwrap_or_else(|| PathBuf::from("target/e2e"));
+    let workdir: PathBuf = arg
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("target/e2e"));
     let _ = std::fs::create_dir_all(&workdir);
     let media = workdir.join("fixture.mp4");
     let project_path = workdir.join("demo.mycut");
@@ -145,15 +172,24 @@ fn e2e(arg: Option<&str>) {
         &ffmpeg.to_string_lossy(),
         &[
             "-y".into(),
-            "-f".into(), "lavfi".into(),
-            "-i".into(), "testsrc2=size=640x360:rate=30".into(),
-            "-f".into(), "lavfi".into(),
-            "-i".into(), "sine=frequency=440:sample_rate=48000".into(),
-            "-t".into(), "20".into(),
-            "-pix_fmt".into(), "yuv420p".into(),
-            "-c:v".into(), "libx264".into(),
-            "-preset".into(), "veryfast".into(),
-            "-c:a".into(), "aac".into(),
+            "-f".into(),
+            "lavfi".into(),
+            "-i".into(),
+            "testsrc2=size=640x360:rate=30".into(),
+            "-f".into(),
+            "lavfi".into(),
+            "-i".into(),
+            "sine=frequency=440:sample_rate=48000".into(),
+            "-t".into(),
+            "20".into(),
+            "-pix_fmt".into(),
+            "yuv420p".into(),
+            "-c:v".into(),
+            "libx264".into(),
+            "-preset".into(),
+            "veryfast".into(),
+            "-c:a".into(),
+            "aac".into(),
             media.to_string_lossy().into_owned(),
         ],
         mycut_engine::process::new_cancel(),
@@ -184,7 +220,14 @@ fn e2e(arg: Option<&str>) {
         role: MediaRole::Footage,
     };
     let src_id = source.id.clone();
-    history.apply(&mut project, Command::AddSource { source: source.clone() }).unwrap();
+    history
+        .apply(
+            &mut project,
+            Command::AddSource {
+                source: source.clone(),
+            },
+        )
+        .unwrap();
     let dur = source.duration_ms;
     let item = Item::new(
         ItemKind::VideoClip {
@@ -196,12 +239,23 @@ fn e2e(arg: Option<&str>) {
         0,
         dur,
     );
-    history.apply(&mut project, Command::AddClip { track_kind: TrackKind::Video, item }).unwrap();
+    history
+        .apply(
+            &mut project,
+            Command::AddClip {
+                track_kind: TrackKind::Video,
+                item,
+            },
+        )
+        .unwrap();
     let _ = std::fs::create_dir_all(&workdir);
     projects::save_project(&project, &history, &project_path).expect("save");
     // Save/load roundtrip check (Phase 1 gate evidence).
     let reloaded = projects::load_project(&project_path).unwrap();
-    assert_eq!(serde_json::to_string(&reloaded.project).unwrap(), serde_json::to_string(&project).unwrap());
+    assert_eq!(
+        serde_json::to_string(&reloaded.project).unwrap(),
+        serde_json::to_string(&project).unwrap()
+    );
     evidence["import"] = serde_json::json!({
         "duration_ms": dur, "resolution": format!("{w}x{h}"), "fps": format!("{fn_}/{fd}"), "hash": &hash[..16],
     });
@@ -211,7 +265,15 @@ fn e2e(arg: Option<&str>) {
     let t0 = std::time::Instant::now();
     let cancel = mycut_engine::process::new_cancel();
     let params = analysis::adaptive_params(dur, false);
-    let a = analysis::analyze(&media, &workdir.join("cache"), 1024 * 1024 * 1024, &params, &cancel, None).expect("analysis");
+    let a = analysis::analyze(
+        &media,
+        &workdir.join("cache"),
+        1024 * 1024 * 1024,
+        &params,
+        &cancel,
+        None,
+    )
+    .expect("analysis");
     let analysis_s = t0.elapsed().as_secs_f64();
     evidence["analysis"] = serde_json::json!({
         "seconds": analysis_s,
@@ -223,14 +285,21 @@ fn e2e(arg: Option<&str>) {
         },
     });
     let t1 = std::time::Instant::now();
-    let _ = analysis::analyze(&media, &workdir.join("cache"), 1024 * 1024 * 1024, &params, &cancel, None).expect("analysis cached");
+    let _ = analysis::analyze(
+        &media,
+        &workdir.join("cache"),
+        1024 * 1024 * 1024,
+        &params,
+        &cancel,
+        None,
+    )
+    .expect("analysis cached");
     evidence["analysis"]["cached_seconds"] = serde_json::json!(t1.elapsed().as_secs_f64());
 
     // 4. Apply the fixture plan (stands in for NIM when no API key; the same
     //    path a live plan takes: parse → validate → transaction).
     println!("[4/7] apply plan (parse → validate → transaction)");
-    let plan = format!(
-        r#"{{
+    let plan = r#"{
         "schema_version": "1.0",
         "intent_summary": "vertical, vibrant, punched, 12s cut of the 20s fixture",
         "operations": [
@@ -243,16 +312,25 @@ fn e2e(arg: Option<&str>) {
             {{ "op": "adjust_audio", "params": {{ "normalize": true, "fade_out": 1.0 }} }},
             {{ "op": "set_export_preset", "preset": "custom" }}
         ]
-    }}"#
-    );
+    }"#;
     let ctx = mycut_schema::validate::PlanContext {
         source_duration_s: dur as f64 / 1000.0,
         transcript: Vec::new(),
-        highlights: a.highlights.iter().map(|w| (w.start_s, w.end_s, w.score)).collect(),
+        highlights: a
+            .highlights
+            .iter()
+            .map(|w| (w.start_s, w.end_s, w.score))
+            .collect(),
         allowed_dirs: vec![],
     };
     let mut doc = projects::load_project(&project_path).unwrap();
-    let app = plan_to_commands(&EditPlan::parse(&plan).unwrap(), &mut doc.project, &mut doc.history, &ctx).expect("plan applies");
+    let app = plan_to_commands(
+        &EditPlan::parse(plan).unwrap(),
+        &mut doc.project,
+        &mut doc.history,
+        &ctx,
+    )
+    .expect("plan applies");
     projects::save_project(&doc.project, &doc.history, &project_path).unwrap();
     evidence["plan"] = serde_json::json!({
         "summary": app.summary_parts,
@@ -265,11 +343,21 @@ fn e2e(arg: Option<&str>) {
     //    runs real transcription via whisper.cpp when configured).
     println!("[5/7] captions from transcript (fixture transcript; real ASR = whisper.cpp when configured)");
     let words: Vec<TimedWord> = [
-        ("Welcome", 500, 1000), ("to", 1000, 1200), ("the", 1200, 1400), ("run!", 1400, 1900),
-        ("Look", 5000, 5400), ("at", 5400, 5600), ("that", 5600, 5900), ("CLUTCH.", 5900, 6500),
+        ("Welcome", 500, 1000),
+        ("to", 1000, 1200),
+        ("the", 1200, 1400),
+        ("run!", 1400, 1900),
+        ("Look", 5000, 5400),
+        ("at", 5400, 5600),
+        ("that", 5600, 5900),
+        ("CLUTCH.", 5900, 6500),
     ]
     .iter()
-    .map(|(t, s, e)| TimedWord { text: t.to_string(), start_ms: *s, end_ms: *e })
+    .map(|(t, s, e)| TimedWord {
+        text: t.to_string(),
+        start_ms: *s,
+        end_ms: *e,
+    })
     .collect();
     let entries = segment(&words, &SegmentOptions::default());
     let style = style_for(mycut_core::CaptionStyle::WordHighlight);
@@ -305,9 +393,12 @@ fn e2e(arg: Option<&str>) {
     let decode = mycut_engine::process::run_tool(
         &ffmpeg.to_string_lossy(),
         &[
-            "-v".into(), "error".into(),
-            "-i".into(), out.to_string_lossy().into_owned(),
-            "-f".into(), "null".into(),
+            "-v".into(),
+            "error".into(),
+            "-i".into(),
+            out.to_string_lossy().into_owned(),
+            "-f".into(),
+            "null".into(),
             "-".into(),
         ],
         mycut_engine::process::new_cancel(),

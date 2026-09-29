@@ -156,7 +156,9 @@ impl Command {
                     return Err(CoreError::Invalid("duplicate source id".into()));
                 }
                 p.sources.push(source.clone());
-                Ok(Command::RemoveSource { source_id: source.id.clone() })
+                Ok(Command::RemoveSource {
+                    source_id: source.id.clone(),
+                })
             }
             Command::RemoveSource { source_id } => {
                 let idx = p
@@ -172,14 +174,26 @@ impl Command {
                     )
                 });
                 if in_use {
-                    return Err(CoreError::Invalid("source is in use; delete clips first".into()));
+                    return Err(CoreError::Invalid(
+                        "source is in use; delete clips first".into(),
+                    ));
                 }
                 let source = p.sources.remove(idx);
                 Ok(Command::AddSource { source })
             }
             Command::AddClip { track_kind, item } => {
-                if let ItemKind::VideoClip { source_id, source_in_ms, source_out_ms, speed }
-                    | ItemKind::AudioClip { source_id, source_in_ms, source_out_ms, speed } = &item.kind
+                if let ItemKind::VideoClip {
+                    source_id,
+                    source_in_ms,
+                    source_out_ms,
+                    speed,
+                }
+                | ItemKind::AudioClip {
+                    source_id,
+                    source_in_ms,
+                    source_out_ms,
+                    speed,
+                } = &item.kind
                 {
                     let src = p
                         .source(source_id)
@@ -203,7 +217,9 @@ impl Command {
                     return Err(CoreError::Locked("track is locked".into()));
                 }
                 track.items.push(item.clone());
-                Ok(Command::DeleteItem { item_id: item.id.clone() })
+                Ok(Command::DeleteItem {
+                    item_id: item.id.clone(),
+                })
             }
             Command::SplitClip { item_id, at_ms } => {
                 let (track_idx, item_idx) = locate(p, item_id)?;
@@ -253,7 +269,10 @@ impl Command {
                 track.items[item_idx] = left;
                 track.items.insert(item_idx + 1, right);
                 // Exact inverse: restore the whole pre-split item list.
-                Ok(Command::SetTrackItems { track_kind: kind, items: before })
+                Ok(Command::SetTrackItems {
+                    track_kind: kind,
+                    items: before,
+                })
             }
             Command::SetTrackItems { track_kind, items } => {
                 let track = p
@@ -264,7 +283,10 @@ impl Command {
                 }
                 let before = track.items.clone();
                 track.items = items.clone();
-                Ok(Command::SetTrackItems { track_kind: *track_kind, items: before })
+                Ok(Command::SetTrackItems {
+                    track_kind: *track_kind,
+                    items: before,
+                })
             }
             Command::TrimClip {
                 item_id,
@@ -278,16 +300,24 @@ impl Command {
                 }
                 let item = p.tracks[track_idx].items[item_idx].clone();
                 let (old_in, old_out, old_start, speed, source_id) = match &item.kind {
-                    ItemKind::VideoClip { source_id, source_in_ms, source_out_ms, speed }
-                    | ItemKind::AudioClip { source_id, source_in_ms, source_out_ms, speed } => {
-                        (
-                            *source_in_ms,
-                            *source_out_ms,
-                            item.timeline_start_ms,
-                            *speed,
-                            source_id.clone(),
-                        )
+                    ItemKind::VideoClip {
+                        source_id,
+                        source_in_ms,
+                        source_out_ms,
+                        speed,
                     }
+                    | ItemKind::AudioClip {
+                        source_id,
+                        source_in_ms,
+                        source_out_ms,
+                        speed,
+                    } => (
+                        *source_in_ms,
+                        *source_out_ms,
+                        item.timeline_start_ms,
+                        *speed,
+                        source_id.clone(),
+                    ),
                     _ => return Err(CoreError::Invalid("only clips can be trimmed".into())),
                 };
                 let src = p
@@ -300,8 +330,16 @@ impl Command {
                     return Err(CoreError::Range("source_out must be > source_in".into()));
                 }
                 let item = p.tracks[track_idx].items.get_mut(item_idx).unwrap();
-                if let ItemKind::VideoClip { source_in_ms, source_out_ms, .. }
-                    | ItemKind::AudioClip { source_in_ms, source_out_ms, .. } = &mut item.kind
+                if let ItemKind::VideoClip {
+                    source_in_ms,
+                    source_out_ms,
+                    ..
+                }
+                | ItemKind::AudioClip {
+                    source_in_ms,
+                    source_out_ms,
+                    ..
+                } = &mut item.kind
                 {
                     *source_in_ms = *new_source_in_ms;
                     *source_out_ms = *new_source_out_ms;
@@ -316,7 +354,10 @@ impl Command {
                     new_timeline_start_ms: old_start,
                 })
             }
-            Command::MoveItem { item_id, new_timeline_start_ms } => {
+            Command::MoveItem {
+                item_id,
+                new_timeline_start_ms,
+            } => {
                 let (track_idx, item_idx) = locate(p, item_id)?;
                 if p.tracks[track_idx].locked {
                     return Err(CoreError::Locked("track is locked".into()));
@@ -327,7 +368,10 @@ impl Command {
                     return Err(CoreError::Range("timeline_start must be >= 0".into()));
                 }
                 item.timeline_start_ms = *new_timeline_start_ms;
-                Ok(Command::MoveItem { item_id: item_id.clone(), new_timeline_start_ms: old })
+                Ok(Command::MoveItem {
+                    item_id: item_id.clone(),
+                    new_timeline_start_ms: old,
+                })
             }
             Command::DeleteItem { item_id } => {
                 let (track_idx, item_idx) = locate(p, item_id)?;
@@ -336,7 +380,10 @@ impl Command {
                 }
                 let kind = p.tracks[track_idx].kind;
                 let item = p.tracks[track_idx].items.remove(item_idx);
-                Ok(Command::AddClip { track_kind: kind, item })
+                Ok(Command::AddClip {
+                    track_kind: kind,
+                    item,
+                })
             }
             Command::SetItemVolume { item_id, volume } => {
                 let item = p
@@ -347,7 +394,10 @@ impl Command {
                 }
                 let old = item.volume;
                 item.volume = *volume;
-                Ok(Command::SetItemVolume { item_id: item_id.clone(), volume: old })
+                Ok(Command::SetItemVolume {
+                    item_id: item_id.clone(),
+                    volume: old,
+                })
             }
             Command::SetItemOpacity { item_id, opacity } => {
                 let item = p
@@ -358,7 +408,10 @@ impl Command {
                 }
                 let old = item.opacity;
                 item.opacity = *opacity;
-                Ok(Command::SetItemOpacity { item_id: item_id.clone(), opacity: old })
+                Ok(Command::SetItemOpacity {
+                    item_id: item_id.clone(),
+                    opacity: old,
+                })
             }
             Command::SetClipSpeed { item_id, speed } => {
                 let item = p
@@ -368,13 +421,26 @@ impl Command {
                     return Err(CoreError::Range("speed must be in [0.25, 4]".into()));
                 }
                 match &mut item.kind {
-                    ItemKind::VideoClip { speed: s, source_in_ms, source_out_ms, .. }
-                    | ItemKind::AudioClip { speed: s, source_in_ms, source_out_ms, .. } => {
+                    ItemKind::VideoClip {
+                        speed: s,
+                        source_in_ms,
+                        source_out_ms,
+                        ..
+                    }
+                    | ItemKind::AudioClip {
+                        speed: s,
+                        source_in_ms,
+                        source_out_ms,
+                        ..
+                    } => {
                         let old = *s;
                         let src_len = *source_out_ms - *source_in_ms;
                         *s = *speed;
                         item.timeline_duration_ms = (src_len as f64 / speed).round() as TimeMs;
-                        Ok(Command::SetClipSpeed { item_id: item_id.clone(), speed: old })
+                        Ok(Command::SetClipSpeed {
+                            item_id: item_id.clone(),
+                            speed: old,
+                        })
                     }
                     _ => Err(CoreError::Invalid("only clips support speed".into())),
                 }
@@ -395,7 +461,10 @@ impl Command {
                 Ok(Command::SetExport { settings: old })
             }
             Command::AddMarker { time_ms, label } => {
-                p.markers.push(crate::model::Marker { time_ms: *time_ms, label: label.clone() });
+                p.markers.push(crate::model::Marker {
+                    time_ms: *time_ms,
+                    label: label.clone(),
+                });
                 Ok(Command::RemoveMarker { time_ms: *time_ms })
             }
             Command::RemoveMarker { time_ms } => {
@@ -405,7 +474,10 @@ impl Command {
                     .position(|m| m.time_ms == *time_ms)
                     .ok_or_else(|| CoreError::NotFound("marker".into()))?;
                 let m = p.markers.remove(pos);
-                Ok(Command::AddMarker { time_ms: m.time_ms, label: m.label })
+                Ok(Command::AddMarker {
+                    time_ms: m.time_ms,
+                    label: m.label,
+                })
             }
             Command::AddEffect { item_id, effect } => {
                 let item = p
@@ -415,7 +487,10 @@ impl Command {
                     return Err(CoreError::Invalid("duplicate effect id".into()));
                 }
                 item.effects.push(effect.clone());
-                Ok(Command::RemoveEffect { item_id: item_id.clone(), effect_id: effect.id.clone() })
+                Ok(Command::RemoveEffect {
+                    item_id: item_id.clone(),
+                    effect_id: effect.id.clone(),
+                })
             }
             Command::RemoveEffect { item_id, effect_id } => {
                 let item = p
@@ -427,7 +502,10 @@ impl Command {
                     .position(|e| e.id == *effect_id)
                     .ok_or_else(|| CoreError::NotFound(format!("effect {effect_id}")))?;
                 let effect = item.effects.remove(pos);
-                Ok(Command::AddEffect { item_id: item_id.clone(), effect })
+                Ok(Command::AddEffect {
+                    item_id: item_id.clone(),
+                    effect,
+                })
             }
             Command::SetTransitions { transitions } => {
                 let old = p.transitions.clone();
@@ -439,9 +517,15 @@ impl Command {
                 p.audio = new.clone();
                 Ok(Command::SetAudioMaster { new: old })
             }
-            Command::ReplaceCaptions { style, scale, safe_area, entries_json } => {
-                let entries: Vec<crate::model::CaptionEntry> = serde_json::from_str(entries_json)
-                    .map_err(|e| CoreError::Invalid(format!("captions entries: {e}")))?;
+            Command::ReplaceCaptions {
+                style,
+                scale,
+                safe_area,
+                entries_json,
+            } => {
+                let entries: Vec<crate::model::CaptionEntry> =
+                    serde_json::from_str(entries_json)
+                        .map_err(|e| CoreError::Invalid(format!("captions entries: {e}")))?;
                 let timeline_end = p.timeline_end_ms();
                 let track = p
                     .track_of_kind_mut(TrackKind::Captions)
@@ -461,7 +545,9 @@ impl Command {
                     Some(it) => Command::RestoreCaptionsItem { item: it },
                     None => Command::RemoveCaptions,
                 };
-                track.items.retain(|i| !matches!(i.kind, ItemKind::Captions { .. }));
+                track
+                    .items
+                    .retain(|i| !matches!(i.kind, ItemKind::Captions { .. }));
                 let mut new_item = Item::new(new_kind, 0, timeline_end);
                 if let Some(old) = old_item {
                     new_item.id = old.id;
@@ -487,7 +573,9 @@ impl Command {
                 let track = p
                     .track_of_kind_mut(TrackKind::Captions)
                     .ok_or_else(|| CoreError::NotFound("captions track".into()))?;
-                track.items.retain(|i| !matches!(i.kind, ItemKind::Captions { .. }));
+                track
+                    .items
+                    .retain(|i| !matches!(i.kind, ItemKind::Captions { .. }));
                 let restored = item.clone();
                 track.items.push(restored);
                 Ok(Command::RemoveCaptions)
@@ -530,7 +618,11 @@ pub struct History {
 impl History {
     #[must_use]
     pub fn new() -> Self {
-        Self { undo_stack: Vec::new(), redo_stack: Vec::new(), max_len: 200 }
+        Self {
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            max_len: 200,
+        }
     }
 
     /// Apply a command and record its inverse (label = original command's).
@@ -540,7 +632,10 @@ impl History {
     pub fn apply(&mut self, p: &mut Project, cmd: Command) -> Result<(), CoreError> {
         let label = cmd.label().to_string();
         let inverse = cmd.apply(p)?;
-        self.push_undo(UndoEntry { label, inverse: vec![inverse] });
+        self.push_undo(UndoEntry {
+            label,
+            inverse: vec![inverse],
+        });
         self.redo_stack.clear();
         Ok(())
     }
@@ -565,7 +660,10 @@ impl History {
             forward.push(inv.apply(p)?);
         }
         forward.reverse();
-        self.redo_stack.push(RedoEntry { label: entry.label.clone(), forward });
+        self.redo_stack.push(RedoEntry {
+            label: entry.label.clone(),
+            forward,
+        });
         Ok(entry.label)
     }
 
@@ -579,7 +677,10 @@ impl History {
         for fwd in entry.forward.iter() {
             inverse.push(fwd.apply(p)?);
         }
-        self.push_undo(UndoEntry { label: entry.label.clone(), inverse });
+        self.push_undo(UndoEntry {
+            label: entry.label.clone(),
+            inverse,
+        });
         Ok(entry.label)
     }
 }
@@ -607,7 +708,10 @@ pub fn apply_transaction(
             }
         }
     }
-    history.push_undo(UndoEntry { label: "AI edit".to_string(), inverse: applied_inverses });
+    history.push_undo(UndoEntry {
+        label: "AI edit".to_string(),
+        inverse: applied_inverses,
+    });
     history.redo_stack.clear();
     Ok(cmds.len())
 }

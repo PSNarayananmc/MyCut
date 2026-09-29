@@ -50,9 +50,6 @@ pub struct EffectContext {
 }
 
 impl EffectContext {
-    fn p(&self, name: &str) -> f64 {
-        self.params.get(name).copied().unwrap_or(0.0)
-    }
     fn p_or(&self, name: &str, default: f64) -> f64 {
         self.params.get(name).copied().unwrap_or(default)
     }
@@ -68,7 +65,12 @@ pub struct EffectDefinition {
 
 impl EffectDefinition {
     fn new(def_id: &str, label: &str, description: &str, params: Vec<EffectParam>) -> Self {
-        Self { def_id: def_id.to_string(), label: label.to_string(), description: description.to_string(), params }
+        Self {
+            def_id: def_id.to_string(),
+            label: label.to_string(),
+            description: description.to_string(),
+            params,
+        }
     }
 }
 
@@ -79,13 +81,14 @@ impl EffectDefinition {
 /// double check; the validator already clamped).
 pub fn build_effect(def_id: &str, ctx: &EffectContext) -> Result<String, EngineError> {
     let defs = registry();
-    let def = defs.iter().find(|d| d.def_id == def_id).ok_or_else(|| {
-        EngineError::Param {
+    let def = defs
+        .iter()
+        .find(|d| d.def_id == def_id)
+        .ok_or_else(|| EngineError::Param {
             name: "effect".into(),
             value: def_id.into(),
             reason: "unknown effect id".into(),
-        }
-    })?;
+        })?;
     // Clamp params to declared ranges (defense in depth).
     let mut params = ctx.params.clone();
     for pd in &def.params {
@@ -138,7 +141,10 @@ fn build_zoom_punch(ctx: &EffectContext) -> Result<String, EngineError> {
     let d = (ctx.end - ctx.start).max(0.05);
     // zoompan produces per-frame zoom following a smooth pulse; d=1 keeps
     // 1 output frame per input frame (video, not slideshow).
-    let z = format!("1+({s:.4}-1)*sin(PI*clip((in_time-{:.3})/{d:.3},0,1))", ctx.start);
+    let z = format!(
+        "1+({s:.4}-1)*sin(PI*clip((in_time-{:.3})/{d:.3},0,1))",
+        ctx.start
+    );
     Ok(format!(
         "zoompan=z='{z}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s={w}x{h}:fps={fps}",
         w = ctx.width,
@@ -154,7 +160,7 @@ fn build_shake(ctx: &EffectContext) -> Result<String, EngineError> {
         return Ok(String::new());
     }
     // Overscan so the moving crop window never leaves the frame.
-    let overscan = 1.0 + (amp as f64) / (ctx.width.min(ctx.height) as f64) * 2.5;
+    let overscan = 1.0 + amp / f64::from(ctx.width.min(ctx.height)) * 2.5;
     Ok(format!(
         "scale=trunc(iw*{ov:.4}/2)*2:trunc(ih*{ov:.4}/2)*2,\
 crop={w}:{h}:'(iw-ow)/2+{amp:.1}*sin((t-{st:.3})*2*PI*{fq:.2})':'(ih-oh)/2+{amp:.1}*cos((t-{st:.3})*2.7*PI*{fq:.2})':{en}",
@@ -173,7 +179,10 @@ fn build_blur(ctx: &EffectContext) -> Result<String, EngineError> {
     if r < 1 {
         return Ok(String::new());
     }
-    Ok(format!("boxblur=luma_radius={r}:luma_power=2:{}", en(ctx.start, ctx.end)))
+    Ok(format!(
+        "boxblur=luma_radius={r}:luma_power=2:{}",
+        en(ctx.start, ctx.end)
+    ))
 }
 
 fn build_sharpen(ctx: &EffectContext) -> Result<String, EngineError> {
@@ -181,7 +190,10 @@ fn build_sharpen(ctx: &EffectContext) -> Result<String, EngineError> {
     if a.abs() < 0.05 {
         return Ok(String::new());
     }
-    Ok(format!("unsharp=5:5:{a:.2}:5:5:0.0:{}", en(ctx.start, ctx.end)))
+    Ok(format!(
+        "unsharp=5:5:{a:.2}:5:5:0.0:{}",
+        en(ctx.start, ctx.end)
+    ))
 }
 
 fn build_vignette(ctx: &EffectContext) -> Result<String, EngineError> {
@@ -190,7 +202,10 @@ fn build_vignette(ctx: &EffectContext) -> Result<String, EngineError> {
         return Ok(String::new());
     }
     let angle = s * std::f64::consts::PI * 0.5;
-    Ok(format!("vignette=angle={angle:.4}:{}", en(ctx.start, ctx.end)))
+    Ok(format!(
+        "vignette=angle={angle:.4}:{}",
+        en(ctx.start, ctx.end)
+    ))
 }
 
 fn build_rgb_split(ctx: &EffectContext) -> Result<String, EngineError> {
@@ -198,7 +213,10 @@ fn build_rgb_split(ctx: &EffectContext) -> Result<String, EngineError> {
     if d < 1 {
         return Ok(String::new());
     }
-    Ok(format!("rgbashift=rh={d}:bv=-{d}:{}", en(ctx.start, ctx.end)))
+    Ok(format!(
+        "rgbashift=rh={d}:bv=-{d}:{}",
+        en(ctx.start, ctx.end)
+    ))
 }
 
 fn build_grain(ctx: &EffectContext) -> Result<String, EngineError> {
@@ -206,7 +224,10 @@ fn build_grain(ctx: &EffectContext) -> Result<String, EngineError> {
     if a < 1 {
         return Ok(String::new());
     }
-    Ok(format!("noise=alls={a}:allf=t+u:{}", en(ctx.start, ctx.end)))
+    Ok(format!(
+        "noise=alls={a}:allf=t+u:{}",
+        en(ctx.start, ctx.end)
+    ))
 }
 
 fn build_pixelate(ctx: &EffectContext) -> Result<String, EngineError> {
@@ -252,40 +273,109 @@ drawbox=x=0:y=ih-{bar}:w=iw:h={bar}:color=black:t=fill:{en}",
 #[must_use]
 pub fn registry() -> Vec<EffectDefinition> {
     vec![
-        EffectDefinition::new("zoom", "Zoom", "Constant center zoom.", vec![
-            EffectParam::new("factor", "Zoom factor", 1.2, 1.0, 3.0, 0.05),
-        ]),
-        EffectDefinition::new("zoom_punch", "Zoom Punch", "Quick zoom-in-and-out pulse on an impact moment.", vec![
-            EffectParam::new("strength", "Strength", 1.18, 1.0, 2.0, 0.01),
-        ]),
-        EffectDefinition::new("shake", "Shake", "Camera shake (sine-driven crop pan with overscan).", vec![
-            EffectParam::new("amplitude", "Amplitude (px)", 12.0, 0.0, 80.0, 1.0),
-            EffectParam::new("frequency", "Frequency (Hz)", 6.0, 0.1, 30.0, 0.1),
-        ]),
-        EffectDefinition::new("blur", "Blur", "Gaussian-ish blur (boxblur) inside a window.", vec![
-            EffectParam::new("radius", "Radius", 8.0, 0.0, 40.0, 1.0),
-        ]),
-        EffectDefinition::new("sharpen", "Sharpen", "Unsharp mask.", vec![
-            EffectParam::new("amount", "Amount", 1.0, 0.0, 3.0, 0.05),
-        ]),
-        EffectDefinition::new("vignette", "Vignette", "Darken frame corners.", vec![
-            EffectParam::new("strength", "Strength", 0.5, 0.0, 1.0, 0.01),
-        ]),
-        EffectDefinition::new("rgb_split", "Chromatic Aberration", "RGB channel split shift.", vec![
-            EffectParam::new("shift_px", "Shift (px)", 3.0, 0.0, 20.0, 1.0),
-        ]),
-        EffectDefinition::new("grain", "Film Grain", "Temporal+uniform noise.", vec![
-            EffectParam::new("strength", "Strength", 12.0, 0.0, 64.0, 1.0),
-        ]),
-        EffectDefinition::new("pixelate", "Pixelate", "Mosaic block effect.", vec![
-            EffectParam::new("block", "Block size", 8.0, 2.0, 64.0, 1.0),
-        ]),
-        EffectDefinition::new("flash", "Flash", "White/color flash pulse.", vec![
-            EffectParam::new("duration", "Duration (s)", 0.18, 0.05, 2.0, 0.01),
-        ]),
-        EffectDefinition::new("cinematic_bars", "Cinematic Bars", "Letterbox bars.", vec![
-            EffectParam::new("height_frac", "Bar height (fraction)", 0.12, 0.0, 0.35, 0.01),
-        ]),
+        EffectDefinition::new(
+            "zoom",
+            "Zoom",
+            "Constant center zoom.",
+            vec![EffectParam::new(
+                "factor",
+                "Zoom factor",
+                1.2,
+                1.0,
+                3.0,
+                0.05,
+            )],
+        ),
+        EffectDefinition::new(
+            "zoom_punch",
+            "Zoom Punch",
+            "Quick zoom-in-and-out pulse on an impact moment.",
+            vec![EffectParam::new(
+                "strength", "Strength", 1.18, 1.0, 2.0, 0.01,
+            )],
+        ),
+        EffectDefinition::new(
+            "shake",
+            "Shake",
+            "Camera shake (sine-driven crop pan with overscan).",
+            vec![
+                EffectParam::new("amplitude", "Amplitude (px)", 12.0, 0.0, 80.0, 1.0),
+                EffectParam::new("frequency", "Frequency (Hz)", 6.0, 0.1, 30.0, 0.1),
+            ],
+        ),
+        EffectDefinition::new(
+            "blur",
+            "Blur",
+            "Gaussian-ish blur (boxblur) inside a window.",
+            vec![EffectParam::new("radius", "Radius", 8.0, 0.0, 40.0, 1.0)],
+        ),
+        EffectDefinition::new(
+            "sharpen",
+            "Sharpen",
+            "Unsharp mask.",
+            vec![EffectParam::new("amount", "Amount", 1.0, 0.0, 3.0, 0.05)],
+        ),
+        EffectDefinition::new(
+            "vignette",
+            "Vignette",
+            "Darken frame corners.",
+            vec![EffectParam::new(
+                "strength", "Strength", 0.5, 0.0, 1.0, 0.01,
+            )],
+        ),
+        EffectDefinition::new(
+            "rgb_split",
+            "Chromatic Aberration",
+            "RGB channel split shift.",
+            vec![EffectParam::new(
+                "shift_px",
+                "Shift (px)",
+                3.0,
+                0.0,
+                20.0,
+                1.0,
+            )],
+        ),
+        EffectDefinition::new(
+            "grain",
+            "Film Grain",
+            "Temporal+uniform noise.",
+            vec![EffectParam::new(
+                "strength", "Strength", 12.0, 0.0, 64.0, 1.0,
+            )],
+        ),
+        EffectDefinition::new(
+            "pixelate",
+            "Pixelate",
+            "Mosaic block effect.",
+            vec![EffectParam::new("block", "Block size", 8.0, 2.0, 64.0, 1.0)],
+        ),
+        EffectDefinition::new(
+            "flash",
+            "Flash",
+            "White/color flash pulse.",
+            vec![EffectParam::new(
+                "duration",
+                "Duration (s)",
+                0.18,
+                0.05,
+                2.0,
+                0.01,
+            )],
+        ),
+        EffectDefinition::new(
+            "cinematic_bars",
+            "Cinematic Bars",
+            "Letterbox bars.",
+            vec![EffectParam::new(
+                "height_frac",
+                "Bar height (fraction)",
+                0.12,
+                0.0,
+                0.35,
+                0.01,
+            )],
+        ),
     ]
 }
 
@@ -324,7 +414,10 @@ mod tests {
             assert!(out.is_ok(), "effect {} failed: {out:?}", def.def_id);
             let s = out.unwrap();
             if !s.is_empty() {
-                assert!(!s.contains(';'), "single-effect chain must not contain graph separators");
+                assert!(
+                    !s.contains(';'),
+                    "single-effect chain must not contain graph separators"
+                );
             }
         }
     }

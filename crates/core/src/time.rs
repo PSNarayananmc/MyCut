@@ -90,7 +90,12 @@ mod tests {
 
     #[test]
     fn easing_bounds() {
-        for e in [Easing::Linear, Easing::EaseIn, Easing::EaseOut, Easing::EaseInOut] {
+        for e in [
+            Easing::Linear,
+            Easing::EaseIn,
+            Easing::EaseOut,
+            Easing::EaseInOut,
+        ] {
             assert!((e.apply(0.0) - 0.0).abs() < 1e-9);
             assert!((e.apply(1.0) - 1.0).abs() < 1e-9);
         }

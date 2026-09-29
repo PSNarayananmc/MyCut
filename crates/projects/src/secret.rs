@@ -38,7 +38,9 @@ impl FileSecretStore {
     pub fn new(config_dir: &std::path::Path) -> Self {
         let dir = config_dir.join("mycut");
         let _ = fs::create_dir_all(&dir);
-        Self { path: dir.join("secret.nvapi") }
+        Self {
+            path: dir.join("secret.nvapi"),
+        }
     }
 }
 
@@ -54,7 +56,10 @@ impl SecretStore for FileSecretStore {
     }
 
     fn get(&self) -> Option<String> {
-        fs::read_to_string(&self.path).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+        fs::read_to_string(&self.path)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
     }
 
     fn delete(&self) -> Result<(), SecretError> {
@@ -77,7 +82,10 @@ pub struct KeyringSecretStore {
 impl KeyringSecretStore {
     #[must_use]
     pub fn new() -> Self {
-        Self { service: "mycut".into(), account: "nim_api_key".into() }
+        Self {
+            service: "mycut".into(),
+            account: "nim_api_key".into(),
+        }
     }
 }
 
@@ -93,7 +101,9 @@ impl SecretStore for KeyringSecretStore {
     fn set(&self, value: &str) -> Result<(), SecretError> {
         let entry = keyring::Entry::new(&self.service, &self.account)
             .map_err(|_| SecretError::KeyringUnavailable)?;
-        entry.set_password(value).map_err(|_| SecretError::KeyringUnavailable)
+        entry
+            .set_password(value)
+            .map_err(|_| SecretError::KeyringUnavailable)
     }
 
     fn get(&self) -> Option<String> {
@@ -140,7 +150,10 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = fs::metadata(&dir.path().join("mycut/secret.nvapi")).unwrap().permissions().mode();
+            let mode = fs::metadata(&dir.path().join("mycut/secret.nvapi"))
+                .unwrap()
+                .permissions()
+                .mode();
             assert_eq!(mode & 0o777, 0o600, "secret file must be 0600");
         }
         store.delete().unwrap();

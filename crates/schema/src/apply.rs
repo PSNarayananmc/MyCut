@@ -1,13 +1,16 @@
 //! Plan application: validated operations -> core Commands (one transaction)
-//! + explicit pending tasks (e.g. transcription for captions). This module is
-//! the ONLY bridge from AI output to the command layer.
+//! + explicit pending tasks (e.g. transcription for captions).
+//!
+//! This module is the ONLY bridge from AI output to the command layer.
+//!
+//! TODO(v1.1): pending caption tasks run through the transcriber pipeline.
 
 use mycut_core::{
-    Command, EffectInstance, Item, ItemKind, ParamValue, Project, TimeMs, TransitionKind,
-    TransitionSetting, AudioMaster, ColorGrade,
+    ColorGrade, Command, EffectInstance, Item, ItemKind, ParamValue, Project, TimeMs,
+    TransitionKind, TransitionSetting,
 };
 
-use crate::plan::{EditPlan, Operation, PlanError, PresetId, RatioId, Selection};
+use crate::plan::{EditPlan, Operation, PlanError, PresetId, Selection};
 use crate::validate::{s_to_ms, validate_plan, PlanContext};
 
 /// A task the app must run after the transaction (never faked).
@@ -45,9 +48,14 @@ pub fn plan_to_commands(
 ) -> Result<PlanApplication, PlanError> {
     let (validated, result) = validate_plan(plan, ctx);
     let Some(ops) = validated else {
-        let err = result.errors.first().cloned().unwrap_or(PlanError::Invalid {
-            op: "plan".into(), reason: "validation failed".into(),
-        });
+        let err = result
+            .errors
+            .first()
+            .cloned()
+            .unwrap_or(PlanError::Invalid {
+                op: "plan".into(),
+                reason: "validation failed".into(),
+            });
         return Err(err);
     };
     let mut app = PlanApplication {
@@ -69,16 +77,21 @@ pub fn plan_to_commands(
     for op in &ops {
         match op {
             Operation::CutRanges { ranges, .. } => {
-                let cid = ensure_clip_memo(project, &mut cmds, &mut clip_created, ctx, &mut ensured_id);
-                let cuts: Vec<(TimeMs, TimeMs)> =
-                    ranges.iter().map(|r| (s_to_ms(r.start), s_to_ms(r.end))).collect();
+                let cid =
+                    ensure_clip_memo(project, &mut cmds, &mut clip_created, ctx, &mut ensured_id);
+                let cuts: Vec<(TimeMs, TimeMs)> = ranges
+                    .iter()
+                    .map(|r| (s_to_ms(r.start), s_to_ms(r.end)))
+                    .collect();
                 let info = effective_clip_info(project, &ensured_id, ctx);
                 cmds.extend(cut_commands(project, &cid, &cuts, info));
                 let removed: f64 = ranges.iter().map(|r| r.end - r.start).sum();
-                app.summary_parts.push(format!("Removed {removed:.1}s of footage"));
+                app.summary_parts
+                    .push(format!("Removed {removed:.1}s of footage"));
             }
             Operation::KeepRanges { ranges, .. } => {
-                let cid = ensure_clip_memo(project, &mut cmds, &mut clip_created, ctx, &mut ensured_id);
+                let cid =
+                    ensure_clip_memo(project, &mut cmds, &mut clip_created, ctx, &mut ensured_id);
                 // Keep = cut the complement.
                 let dur_ms = s_to_ms(ctx.source_duration_s);
                 let mut cuts: Vec<(TimeMs, TimeMs)> = Vec::new();
@@ -98,10 +111,12 @@ pub fn plan_to_commands(
                     let info = effective_clip_info(project, &ensured_id, ctx);
                     cmds.extend(cut_commands(project, &cid, &cuts, info));
                 }
-                app.summary_parts.push(format!("Kept {} ranges", ranges.len()));
+                app.summary_parts
+                    .push(format!("Kept {} ranges", ranges.len()));
             }
             Operation::SetTargetDuration { seconds, selection } => {
-                let cid = ensure_clip_memo(project, &mut cmds, &mut clip_created, ctx, &mut ensured_id);
+                let cid =
+                    ensure_clip_memo(project, &mut cmds, &mut clip_created, ctx, &mut ensured_id);
                 let target_ms = s_to_ms(*seconds);
                 let cur_ms = clip_len(project, &cid).unwrap_or(0);
                 if cur_ms > target_ms {
@@ -123,13 +138,22 @@ pub fn plan_to_commands(
                         let info = effective_clip_info(project, &ensured_id, ctx);
                         cmds.extend(cut_commands(project, &cid, &cuts, info));
                     }
-                    app.summary_parts.push(format!("Trimmed to {seconds:.0}s ({selection:?})"));
+                    app.summary_parts
+                        .push(format!("Trimmed to {seconds:.0}s ({selection:?})"));
                 } else {
-                    app.summary_parts.push("Timeline already within target duration".into());
+                    app.summary_parts
+                        .push("Timeline already within target duration".into());
                 }
             }
-            Operation::AddEffect { effect, start, end, params, .. } => {
-                let cid = ensure_clip_memo(project, &mut cmds, &mut clip_created, ctx, &mut ensured_id);
+            Operation::AddEffect {
+                effect,
+                start,
+                end,
+                params,
+                ..
+            } => {
+                let cid =
+                    ensure_clip_memo(project, &mut cmds, &mut clip_created, ctx, &mut ensured_id);
                 let def_id = effect_def_id(effect);
                 let mut pmap = std::collections::BTreeMap::new();
                 for (k, v) in params {
@@ -148,7 +172,10 @@ pub fn plan_to_commands(
                     keyframes: Vec::new(),
                     easing: mycut_core::Easing::EaseOut,
                 };
-                cmds.push(Command::AddEffect { item_id: cid.clone(), effect: eff });
+                cmds.push(Command::AddEffect {
+                    item_id: cid.clone(),
+                    effect: eff,
+                });
                 app.summary_parts.push(format!("Added {def_id} effect"));
             }
             Operation::RemoveEffect { effect } => {
@@ -164,23 +191,53 @@ pub fn plan_to_commands(
                         })
                         .unwrap_or_default();
                     for id in ids {
-                        cmds.push(Command::RemoveEffect { item_id: cid.clone(), effect_id: id });
+                        cmds.push(Command::RemoveEffect {
+                            item_id: cid.clone(),
+                            effect_id: id,
+                        });
                     }
                 }
                 app.summary_parts.push(format!("Removed {effect} effects"));
             }
-            Operation::SetColor { params, merge_with_existing } => {
-                let mut grade = if *merge_with_existing { project.color.clone() } else { ColorGrade::default() };
-                if let Some(v) = params.exposure { grade.exposure = v; }
-                if let Some(v) = params.contrast { grade.contrast = v; }
-                if let Some(v) = params.saturation { grade.saturation = v; }
-                if let Some(v) = params.vibrance { grade.vibrance = v; }
-                if let Some(v) = params.temperature { grade.temperature = v; }
-                if let Some(v) = params.gamma { grade.gamma = v; }
-                if let Some(v) = params.shadows { grade.shadows = v; }
-                if let Some(v) = params.highlights { grade.highlights = v; }
-                if let Some(l) = &params.lut { grade.lut = Some(l.clone()); }
-                if let Some(v) = params.lut_intensity { grade.lut_intensity = v; }
+            Operation::SetColor {
+                params,
+                merge_with_existing,
+            } => {
+                let mut grade = if *merge_with_existing {
+                    project.color.clone()
+                } else {
+                    ColorGrade::default()
+                };
+                if let Some(v) = params.exposure {
+                    grade.exposure = v;
+                }
+                if let Some(v) = params.contrast {
+                    grade.contrast = v;
+                }
+                if let Some(v) = params.saturation {
+                    grade.saturation = v;
+                }
+                if let Some(v) = params.vibrance {
+                    grade.vibrance = v;
+                }
+                if let Some(v) = params.temperature {
+                    grade.temperature = v;
+                }
+                if let Some(v) = params.gamma {
+                    grade.gamma = v;
+                }
+                if let Some(v) = params.shadows {
+                    grade.shadows = v;
+                }
+                if let Some(v) = params.highlights {
+                    grade.highlights = v;
+                }
+                if let Some(l) = &params.lut {
+                    grade.lut = Some(l.clone());
+                }
+                if let Some(v) = params.lut_intensity {
+                    grade.lut_intensity = v;
+                }
                 cmds.push(Command::SetColor { new_grade: grade });
                 app.summary_parts.push("Applied color grade".into());
             }
@@ -191,7 +248,8 @@ pub fn plan_to_commands(
                         ratio: crate::validate::ratio_to_aspect(*ratio),
                         mode: match reframe {
                             crate::plan::ReframeMode::Center => mycut_core::ReframeMode::Center,
-                            crate::plan::ReframeMode::SubjectFollow | crate::plan::ReframeMode::Smart => {
+                            crate::plan::ReframeMode::SubjectFollow
+                            | crate::plan::ReframeMode::Smart => {
                                 mycut_core::ReframeMode::SubjectFollow
                             }
                         },
@@ -200,7 +258,13 @@ pub fn plan_to_commands(
                 let (w, h) = crate::validate::ratio_to_aspect(*ratio).wh();
                 app.summary_parts.push(format!("Converted to {}:{}", w, h));
             }
-            Operation::GenerateCaptions { style, safe_area, max_words_per_line, scale, .. } => {
+            Operation::GenerateCaptions {
+                style,
+                safe_area,
+                max_words_per_line,
+                scale,
+                ..
+            } => {
                 app.pending.push(PendingTask::TranscribeAndCaption {
                     style_id: *style,
                     safe_area: safe_area.unwrap_or(crate::plan::SafeArea::Default),
@@ -209,14 +273,27 @@ pub fn plan_to_commands(
                 });
                 app.summary_parts.push("Queued automatic captions".into());
             }
-            Operation::UpdateCaptions { style, scale, safe_area } => {
+            Operation::UpdateCaptions {
+                style,
+                scale,
+                safe_area,
+            } => {
                 // Update requires an existing captions item.
                 if let Some(item) = project
                     .track_of_kind(mycut_core::TrackKind::Captions)
-                    .and_then(|t| t.items.iter().find(|i| matches!(i.kind, ItemKind::Captions { .. })))
+                    .and_then(|t| {
+                        t.items
+                            .iter()
+                            .find(|i| matches!(i.kind, ItemKind::Captions { .. }))
+                    })
                 {
                     let (cur_style, cur_scale, cur_safe, entries_json) = match &item.kind {
-                        ItemKind::Captions { style, scale, safe_area, entries } => (
+                        ItemKind::Captions {
+                            style,
+                            scale,
+                            safe_area,
+                            entries,
+                        } => (
                             *style,
                             *scale,
                             safe_area.clone(),
@@ -226,7 +303,10 @@ pub fn plan_to_commands(
                     };
                     let new_style = style.map(caption_style).unwrap_or(cur_style);
                     let new_scale = scale.unwrap_or(cur_scale);
-                    let new_safe = safe_area.as_ref().map(|sa| format!("{:?}", sa).to_lowercase()).unwrap_or(cur_safe);
+                    let new_safe = safe_area
+                        .as_ref()
+                        .map(|sa| format!("{:?}", sa).to_lowercase())
+                        .unwrap_or(cur_safe);
                     cmds.push(Command::ReplaceCaptions {
                         style: new_style,
                         scale: new_scale,
@@ -235,20 +315,27 @@ pub fn plan_to_commands(
                     });
                     app.summary_parts.push("Updated captions style".into());
                 } else {
-                    app.warnings.push("update_captions: no captions exist yet".into());
+                    app.warnings
+                        .push("update_captions: no captions exist yet".into());
                 }
             }
             Operation::RemoveCaptions => {
                 cmds.push(Command::RemoveCaptions);
                 app.summary_parts.push("Removed captions".into());
             }
-            Operation::AddTransition { transition, at_index, duration } => {
+            Operation::AddTransition {
+                transition,
+                at_index,
+                duration,
+            } => {
                 let mut list = project.transitions.clone();
                 let idx = at_index.unwrap_or(0) as usize;
                 let dur_ms = s_to_ms(duration.unwrap_or(0.5));
                 let kind = match transition {
                     crate::plan::TransitionId::Cut => TransitionKind::Cut,
-                    crate::plan::TransitionId::Fade | crate::plan::TransitionId::Crossfade => TransitionKind::Crossfade,
+                    crate::plan::TransitionId::Fade | crate::plan::TransitionId::Crossfade => {
+                        TransitionKind::Crossfade
+                    }
                     crate::plan::TransitionId::DipToBlack => TransitionKind::DipToBlack,
                     crate::plan::TransitionId::DipToWhite => TransitionKind::DipToWhite,
                     crate::plan::TransitionId::Slide => TransitionKind::Slide,
@@ -258,11 +345,24 @@ pub fn plan_to_commands(
                     crate::plan::TransitionId::Wipe => TransitionKind::Wipe,
                 };
                 list.retain(|t| t.after_index != idx);
-                list.push(TransitionSetting { after_index: idx, kind, duration_ms: dur_ms });
+                list.push(TransitionSetting {
+                    after_index: idx,
+                    kind,
+                    duration_ms: dur_ms,
+                });
                 cmds.push(Command::SetTransitions { transitions: list });
-                app.summary_parts.push(format!("Added {transition:?} transition"));
+                app.summary_parts
+                    .push(format!("Added {transition:?} transition"));
             }
-            Operation::AddText { text, start, end, kind, position, scale, opacity } => {
+            Operation::AddText {
+                text,
+                start,
+                end,
+                kind,
+                position,
+                scale,
+                opacity,
+            } => {
                 let item = Item::new(
                     ItemKind::Text {
                         kind: match kind {
@@ -276,10 +376,14 @@ pub fn plan_to_commands(
                             crate::plan::PositionId::TopLeft => mycut_core::Position::TopLeft,
                             crate::plan::PositionId::TopRight => mycut_core::Position::TopRight,
                             crate::plan::PositionId::BottomLeft => mycut_core::Position::BottomLeft,
-                            crate::plan::PositionId::BottomRight => mycut_core::Position::BottomRight,
+                            crate::plan::PositionId::BottomRight => {
+                                mycut_core::Position::BottomRight
+                            }
                             crate::plan::PositionId::Center => mycut_core::Position::Center,
                             crate::plan::PositionId::TopCenter => mycut_core::Position::TopCenter,
-                            crate::plan::PositionId::BottomCenter => mycut_core::Position::BottomCenter,
+                            crate::plan::PositionId::BottomCenter => {
+                                mycut_core::Position::BottomCenter
+                            }
                         },
                         scale: scale.unwrap_or(1.0),
                         opacity: opacity.unwrap_or(1.0),
@@ -291,80 +395,149 @@ pub fn plan_to_commands(
                     track_kind: mycut_core::TrackKind::Text,
                     item,
                 });
-                app.summary_parts.push(format!("Added text: \"{}\"", text.chars().take(24).collect::<String>()));
+                app.summary_parts.push(format!(
+                    "Added text: \"{}\"",
+                    text.chars().take(24).collect::<String>()
+                ));
             }
-            Operation::UpdateText { target_id, text, scale, opacity, position } => {
+            Operation::UpdateText {
+                target_id,
+                text,
+                scale,
+                opacity,
+                position,
+            } => {
                 let mut changed = false;
                 if let Some(item) = project.find_item_mut(target_id) {
-                    if let ItemKind::Text { text: t, scale: s, opacity: o, position: pos, kind: _ } = &mut item.kind {
-                        if let Some(nt) = text { *t = nt.clone(); changed = true; }
-                        if let Some(ns) = scale { *s = *ns; changed = true; }
-                        if let Some(no) = opacity { *o = *no; changed = true; }
+                    if let ItemKind::Text {
+                        text: t,
+                        scale: s,
+                        opacity: o,
+                        position: pos,
+                        kind: _,
+                    } = &mut item.kind
+                    {
+                        if let Some(nt) = text {
+                            *t = nt.clone();
+                            changed = true;
+                        }
+                        if let Some(ns) = scale {
+                            *s = *ns;
+                            changed = true;
+                        }
+                        if let Some(no) = opacity {
+                            *o = *no;
+                            changed = true;
+                        }
                         if let Some(np) = position {
                             *pos = match np {
                                 crate::plan::PositionId::TopLeft => mycut_core::Position::TopLeft,
                                 crate::plan::PositionId::TopRight => mycut_core::Position::TopRight,
-                                crate::plan::PositionId::BottomLeft => mycut_core::Position::BottomLeft,
-                                crate::plan::PositionId::BottomRight => mycut_core::Position::BottomRight,
+                                crate::plan::PositionId::BottomLeft => {
+                                    mycut_core::Position::BottomLeft
+                                }
+                                crate::plan::PositionId::BottomRight => {
+                                    mycut_core::Position::BottomRight
+                                }
                                 crate::plan::PositionId::Center => mycut_core::Position::Center,
-                                crate::plan::PositionId::TopCenter => mycut_core::Position::TopCenter,
-                                crate::plan::PositionId::BottomCenter => mycut_core::Position::BottomCenter,
+                                crate::plan::PositionId::TopCenter => {
+                                    mycut_core::Position::TopCenter
+                                }
+                                crate::plan::PositionId::BottomCenter => {
+                                    mycut_core::Position::BottomCenter
+                                }
                             };
                             changed = true;
                         }
                     }
                 }
                 if !changed {
-                    app.warnings.push(format!("update_text: item {target_id} not found or not text"));
+                    app.warnings.push(format!(
+                        "update_text: item {target_id} not found or not text"
+                    ));
                 }
             }
             Operation::RemoveText { target_id } => {
-                cmds.push(Command::DeleteItem { item_id: target_id.clone() });
+                cmds.push(Command::DeleteItem {
+                    item_id: target_id.clone(),
+                });
             }
             Operation::AdjustAudio { params } => {
                 let mut master = project.audio.clone();
-                if let Some(v) = params.normalize { master.normalize = v; }
-                if let Some(v) = params.denoise { master.denoise = v; }
-                if let Some(v) = params.remove_silence { master.remove_silence = v; }
-                if let Some(v) = params.duck_music_under_speech { master.duck_music_under_speech = v; }
-                if let Some(v) = params.fade_in { master.fade_in_s = v; }
-                if let Some(v) = params.fade_out { master.fade_out_s = v; }
+                if let Some(v) = params.normalize {
+                    master.normalize = v;
+                }
+                if let Some(v) = params.denoise {
+                    master.denoise = v;
+                }
+                if let Some(v) = params.remove_silence {
+                    master.remove_silence = v;
+                }
+                if let Some(v) = params.duck_music_under_speech {
+                    master.duck_music_under_speech = v;
+                }
+                if let Some(v) = params.fade_in {
+                    master.fade_in_s = v;
+                }
+                if let Some(v) = params.fade_out {
+                    master.fade_out_s = v;
+                }
                 cmds.push(Command::SetAudioMaster { new: master });
                 if let Some(vol) = params.volume {
                     if let Some(cid) = primary_clip_id(project) {
-                        cmds.push(Command::SetItemVolume { item_id: cid, volume: vol });
+                        cmds.push(Command::SetItemVolume {
+                            item_id: cid,
+                            volume: vol,
+                        });
                     }
                 }
                 app.summary_parts.push("Adjusted audio".into());
             }
             Operation::SetSpeed { start, end, speed } => {
-                let cid = ensure_clip_memo(project, &mut cmds, &mut clip_created, ctx, &mut ensured_id);
+                let cid =
+                    ensure_clip_memo(project, &mut cmds, &mut clip_created, ctx, &mut ensured_id);
                 let (in_ms, out_ms) = clip_range(project, &cid);
                 let s_ms = s_to_ms(*start).max(in_ms);
                 let e_ms = s_to_ms(*end).min(out_ms);
                 if s_ms > in_ms + 20 {
-                    cmds.push(Command::SplitClip { item_id: cid.clone(), at_ms: tl_for_src(project, &cid, s_ms) });
+                    cmds.push(Command::SplitClip {
+                        item_id: cid.clone(),
+                        at_ms: tl_for_src(project, &cid, s_ms),
+                    });
                 }
                 if e_ms < out_ms - 20 {
-                    cmds.push(Command::SplitClip { item_id: cid.clone(), at_ms: tl_for_src(project, &cid, e_ms) });
+                    cmds.push(Command::SplitClip {
+                        item_id: cid.clone(),
+                        at_ms: tl_for_src(project, &cid, e_ms),
+                    });
                 }
                 // After splits, find the piece fully inside [s_ms, e_ms].
                 let target = project
                     .tracks
                     .iter()
                     .flat_map(|t| t.items.iter())
-                    .find(|i| matches!(&i.kind, ItemKind::VideoClip { source_in_ms, source_out_ms, .. }
-                        if *source_in_ms >= s_ms - 20 && *source_out_ms <= e_ms + 20))
+                    .find(|i| {
+                        matches!(&i.kind, ItemKind::VideoClip { source_in_ms, source_out_ms, .. }
+                        if *source_in_ms >= s_ms - 20 && *source_out_ms <= e_ms + 20)
+                    })
                     .map(|i| i.id.clone());
                 if let Some(tid) = target {
-                    cmds.push(Command::SetClipSpeed { item_id: tid, speed: *speed });
-                    app.summary_parts.push(format!("Speed {speed:.2}x on segment"));
+                    cmds.push(Command::SetClipSpeed {
+                        item_id: tid,
+                        speed: *speed,
+                    });
+                    app.summary_parts
+                        .push(format!("Speed {speed:.2}x on segment"));
                 } else {
-                    app.warnings.push("set_speed: matching segment not found".into());
+                    app.warnings
+                        .push("set_speed: matching segment not found".into());
                 }
             }
             Operation::AddMarker { time, label } => {
-                cmds.push(Command::AddMarker { time_ms: s_to_ms(*time), label: label.clone() });
+                cmds.push(Command::AddMarker {
+                    time_ms: s_to_ms(*time),
+                    label: label.clone(),
+                });
             }
             Operation::SetExportPreset { preset } => {
                 if let Some(p) = preset_settings(preset, project, planned_ratio) {
@@ -372,13 +545,16 @@ pub fn plan_to_commands(
                     app.summary_parts.push(format!("Export preset: {preset:?}"));
                 }
             }
-            Operation::SetAspect { .. } => unreachable!(),
         }
     }
 
     // One transaction: AI edit undoes as ONE step.
-    mycut_core::apply_transaction(history, project, std::mem::take(&mut cmds))
-        .map_err(|e| PlanError::Invalid { op: "apply".into(), reason: e.to_string() })?;
+    mycut_core::apply_transaction(history, project, std::mem::take(&mut cmds)).map_err(|e| {
+        PlanError::Invalid {
+            op: "apply".into(),
+            reason: e.to_string(),
+        }
+    })?;
     app.repairs = result.repairs;
     Ok(app)
 }
@@ -456,10 +632,12 @@ fn selection_windows(
             let n = 4;
             let per = keep_total / n as f64;
             let stride = dur_s / n as f64;
-            (0..n).map(|i| {
-                let s = (i as f64 * stride).min((dur_s - per).max(0.0));
-                (s_to_ms(s), s_to_ms((s + per).min(dur_s)))
-            }).collect()
+            (0..n)
+                .map(|i| {
+                    let s = (i as f64 * stride).min((dur_s - per).max(0.0));
+                    (s_to_ms(s), s_to_ms((s + per).min(dur_s)))
+                })
+                .collect()
         }
         Selection::Highlights => {
             if ctx.highlights.is_empty() {
@@ -487,7 +665,11 @@ fn selection_windows(
 fn primary_clip_id(project: &Project) -> Option<String> {
     project
         .track_of_kind(mycut_core::TrackKind::Video)
-        .and_then(|t| t.items.iter().find(|i| matches!(i.kind, ItemKind::VideoClip { .. })))
+        .and_then(|t| {
+            t.items
+                .iter()
+                .find(|i| matches!(i.kind, ItemKind::VideoClip { .. }))
+        })
         .map(|i| i.id.clone())
 }
 
@@ -532,7 +714,10 @@ fn ensure_clip(
         src.duration_ms.min(s_to_ms(ctx.source_duration_s)),
     );
     let id = item.id.clone();
-    cmds.push(Command::AddClip { track_kind: mycut_core::TrackKind::Video, item });
+    cmds.push(Command::AddClip {
+        track_kind: mycut_core::TrackKind::Video,
+        item,
+    });
     *created = true;
     id
 }
@@ -544,12 +729,17 @@ fn clip_range(project: &Project, cid: &str) -> (TimeMs, TimeMs) {
         .flat_map(|t| t.items.iter())
         .find(|i| i.id == cid)
         .and_then(|i| match &i.kind {
-            ItemKind::VideoClip { source_in_ms, source_out_ms, .. } => Some((*source_in_ms, *source_out_ms)),
+            ItemKind::VideoClip {
+                source_in_ms,
+                source_out_ms,
+                ..
+            } => Some((*source_in_ms, *source_out_ms)),
             _ => None,
         })
         .unwrap_or((0, 0))
 }
 
+#[allow(dead_code)]
 fn clip_len(project: &Project, cid: &str) -> Option<TimeMs> {
     let (a, b) = clip_range(project, cid);
     Some(b - a)
@@ -565,14 +755,21 @@ struct ClipInfo {
     source_id: String,
 }
 
-fn effective_clip_info(
-    project: &Project,
-    memo: &Option<String>,
-    ctx: &PlanContext,
-) -> ClipInfo {
+fn effective_clip_info(project: &Project, memo: &Option<String>, ctx: &PlanContext) -> ClipInfo {
     if let Some(cid) = memo {
-        if let Some(item) = project.tracks.iter().flat_map(|t| t.items.iter()).find(|i| i.id == *cid) {
-            if let ItemKind::VideoClip { source_id, source_in_ms, source_out_ms, .. } = &item.kind {
+        if let Some(item) = project
+            .tracks
+            .iter()
+            .flat_map(|t| t.items.iter())
+            .find(|i| i.id == *cid)
+        {
+            if let ItemKind::VideoClip {
+                source_id,
+                source_in_ms,
+                source_out_ms,
+                ..
+            } = &item.kind
+            {
                 return ClipInfo {
                     range: (*source_in_ms, *source_out_ms),
                     source_id: source_id.clone(),
@@ -582,12 +779,16 @@ fn effective_clip_info(
     }
     ClipInfo {
         range: (0, s_to_ms(ctx.source_duration_s)),
-        source_id: project.sources.first().map(|s| s.id.clone()).unwrap_or_default(),
+        source_id: project
+            .sources
+            .first()
+            .map(|s| s.id.clone())
+            .unwrap_or_default(),
     }
 }
 
 fn cut_commands(
-    project: &Project,
+    _project: &Project,
     cid: &str,
     cuts: &[(TimeMs, TimeMs)],
     info: ClipInfo,
@@ -638,7 +839,10 @@ fn cut_commands(
             tl,
             len,
         );
-        cmds.push(Command::AddClip { track_kind: mycut_core::TrackKind::Video, item });
+        cmds.push(Command::AddClip {
+            track_kind: mycut_core::TrackKind::Video,
+            item,
+        });
         tl += len;
     }
     cmds
@@ -651,9 +855,11 @@ fn tl_for_src(project: &Project, cid: &str, src_ms: TimeMs) -> TimeMs {
         .flat_map(|t| t.items.iter())
         .find(|i| i.id == cid)
         .and_then(|i| match &i.kind {
-            ItemKind::VideoClip { source_in_ms, speed, .. } => {
-                Some(i.timeline_start_ms + ((src_ms - *source_in_ms) as f64 / *speed) as TimeMs)
-            }
+            ItemKind::VideoClip {
+                source_in_ms,
+                speed,
+                ..
+            } => Some(i.timeline_start_ms + ((src_ms - *source_in_ms) as f64 / *speed) as TimeMs),
             _ => None,
         })
         .unwrap_or(0)
@@ -662,8 +868,7 @@ fn tl_for_src(project: &Project, cid: &str, src_ms: TimeMs) -> TimeMs {
 // Re-export for the CLI/app layers.
 pub use crate::validate::ValidationResult;
 
-#[allow(unused)]
-fn _suppress(_p: &Project) {}
+
 
 #[allow(unused_imports)]
 use PlanError as _PlanErrorImport;

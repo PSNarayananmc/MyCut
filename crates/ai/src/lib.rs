@@ -4,13 +4,18 @@
 
 pub mod agent;
 pub mod prompt;
+pub mod provider;
 #[cfg(test)]
 pub mod stub;
-pub mod provider;
 
 pub use agent::{plan_and_apply, AgentOutcome, MAX_REPAIRS};
-pub use provider::{AIProvider, AiError, Caps, ChatMessage, NimConfig, NvidiaNimProvider, PlanRequest, PlanResponse};
-pub use prompt::{build_messages, catalog_text, system_prompt, AnalysisDigest, ContextSummary, PROMPT_VERSION, SourceSummary, TimelineSummary};
+pub use prompt::{
+    build_messages, catalog_text, system_prompt, AnalysisDigest, ContextSummary, SourceSummary,
+    TimelineSummary, PROMPT_VERSION,
+};
+pub use provider::{
+    AIProvider, AiError, Caps, ChatMessage, NimConfig, NvidiaNimProvider, PlanRequest, PlanResponse,
+};
 
 #[cfg(test)]
 mod tests {
@@ -38,9 +43,11 @@ mod tests {
             "content_hash": "abc", "duration_ms": 60_000, "width": 1280,
             "height": 720, "fps_num": 30, "fps_den": 1, "has_audio": true,
             "role": "footage"
-        })).unwrap();
+        }))
+        .unwrap();
         let mut h = mycut_core::History::new();
-        h.apply(&mut p, mycut_core::Command::AddSource { source }).unwrap();
+        h.apply(&mut p, mycut_core::Command::AddSource { source })
+            .unwrap();
         (p, h)
     }
 
@@ -66,8 +73,12 @@ mod tests {
     fn summary() -> ContextSummary {
         ContextSummary {
             sources: vec![SourceSummary {
-                name: "clip.mp4".into(), role: "footage".into(), duration_s: 60.0,
-                resolution: "1280x720".into(), fps: 30.0, has_audio: true,
+                name: "clip.mp4".into(),
+                role: "footage".into(),
+                duration_s: 60.0,
+                resolution: "1280x720".into(),
+                fps: 30.0,
+                has_audio: true,
             }],
             request: "Make this a 30 second gaming Short with captions".into(),
             ..Default::default()
@@ -76,53 +87,102 @@ mod tests {
 
     #[test]
     fn valid_plan_applies_and_mutates_project() {
-        let (base, counter) = spawn(Arc::new(|_, _, _| StubResponse {
+        let (base, counter) = spawn(Arc::new(|_, _, _| {
+            StubResponse {
             status: 200,
             body: format!("{{\"choices\":[{{\"message\":{{\"content\":{}}}}}],\"model\":\"test-model\",\"usage\":{{\"prompt_tokens\":10,\"completion_tokens\":10}}}}",
                 serde_json::to_string(VALID_PLAN_JSON).unwrap()),
             headers: vec![],
             delay_ms: 0,
+        }
         }));
         let provider = NvidiaNimProvider::new(test_config(&base, "sk-test"));
         let (mut p, mut h) = project_with_source();
-        let outcome = plan_and_apply(&provider, &mut p, &mut h, &schema_ctx(), &summary(), false, &AtomicBool::new(false));
+        let outcome = plan_and_apply(
+            &provider,
+            &mut p,
+            &mut h,
+            &schema_ctx(),
+            &summary(),
+            false,
+            &AtomicBool::new(false),
+        );
         assert!(outcome.applied, "{outcome:?}");
         assert_eq!(outcome.requests_made, 1);
         assert_eq!(counter.load(Ordering::SeqCst), 1);
         assert_eq!(p.color.saturation, 1.15, "color applied");
         assert!(p.reframe.is_some(), "reframe applied");
-        assert_eq!(p.tracks[0].items.len(), 2, "cut 12-16s of 60s leaves two segments");
+        assert_eq!(
+            p.tracks[0].items.len(),
+            2,
+            "cut 12-16s of 60s leaves two segments"
+        );
     }
 
     #[test]
     fn malformed_then_valid_uses_repair_loop() {
         let (base, _) = spawn(Arc::new(|n, _, _| {
             if n == 0 {
-                StubResponse { status: 200, body: r#"{"choices":[{"message":{"content":"not json at all"}}]}"#.into(), headers: vec![], delay_ms: 0 }
+                StubResponse {
+                    status: 200,
+                    body: r#"{"choices":[{"message":{"content":"not json at all"}}]}"#.into(),
+                    headers: vec![],
+                    delay_ms: 0,
+                }
             } else {
-                StubResponse { status: 200, body: ok_response(VALID_PLAN_JSON), headers: vec![], delay_ms: 0 }
+                StubResponse {
+                    status: 200,
+                    body: ok_response(VALID_PLAN_JSON),
+                    headers: vec![],
+                    delay_ms: 0,
+                }
             }
         }));
         let provider = NvidiaNimProvider::new(test_config(&base, "sk-test"));
         let (mut p, mut h) = project_with_source();
-        let outcome = plan_and_apply(&provider, &mut p, &mut h, &schema_ctx(), &summary(), false, &AtomicBool::new(false));
-        assert!(outcome.applied, "repair loop must succeed on attempt 2: {outcome:?}");
+        let outcome = plan_and_apply(
+            &provider,
+            &mut p,
+            &mut h,
+            &schema_ctx(),
+            &summary(),
+            false,
+            &AtomicBool::new(false),
+        );
+        assert!(
+            outcome.applied,
+            "repair loop must succeed on attempt 2: {outcome:?}"
+        );
         assert_eq!(outcome.requests_made, 2);
     }
 
     #[test]
     fn consistently_malformed_fails_after_two_repairs() {
-        let (base, counter) = spawn(Arc::new(|_, _, _| StubResponse {
+        let (base, counter) = spawn(Arc::new(|_, _, _| {
+            StubResponse {
             status: 200,
             body: r#"{"choices":[{"message":{"content":"{\"schema_version\":\"1.0\",\"intent_summary\":\"x\",\"operations\":[{\"op\":\"cut_ranges\",\"ranges\":[{\"start\":999,\"end\":1000}]}]}"}}]}"#.into(),
             headers: vec![],
             delay_ms: 0,
+        }
         }));
         let provider = NvidiaNimProvider::new(test_config(&base, "sk-test"));
         let (mut p, mut h) = project_with_source();
-        let outcome = plan_and_apply(&provider, &mut p, &mut h, &schema_ctx(), &summary(), false, &AtomicBool::new(false));
+        let outcome = plan_and_apply(
+            &provider,
+            &mut p,
+            &mut h,
+            &schema_ctx(),
+            &summary(),
+            false,
+            &AtomicBool::new(false),
+        );
         assert!(!outcome.applied);
-        assert_eq!(outcome.requests_made, 1 + MAX_REPAIRS, "initial + 2 corrections");
+        assert_eq!(
+            outcome.requests_made,
+            1 + MAX_REPAIRS,
+            "initial + 2 corrections"
+        );
         assert!(matches!(outcome.error, Some(AiError::BadOutput(_))));
         assert_eq!(counter.load(Ordering::SeqCst), 3);
         // Nothing was applied to the project.
@@ -133,33 +193,50 @@ mod tests {
     #[test]
     fn http_401_maps_to_invalid_key_without_retries() {
         let (base, counter) = spawn(Arc::new(|_, _, _| StubResponse {
-            status: 401, body: "{\"error\":\"bad key\"}".into(), headers: vec![], delay_ms: 0,
+            status: 401,
+            body: "{\"error\":\"bad key\"}".into(),
+            headers: vec![],
+            delay_ms: 0,
         }));
         let provider = NvidiaNimProvider::new(test_config(&base, "sk-canary-DO-NOT-LOG"));
         let err = provider.test_connection().unwrap_err();
         assert!(matches!(err, AiError::InvalidApiKey));
-        assert_eq!(counter.load(Ordering::SeqCst), 1, "no retries on auth failure");
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "no retries on auth failure"
+        );
         // Canary: the key never appears in the error text or debug output.
         let err_text = format!("{err} {err:?}");
-        assert!(!err_text.contains("sk-canary-DO-NOT-LOG"), "canary leaked: {err_text}");
+        assert!(
+            !err_text.contains("sk-canary-DO-NOT-LOG"),
+            "canary leaked: {err_text}"
+        );
     }
 
     #[test]
     fn http_429_retries_honoring_retry_after() {
         let (base, counter) = spawn(Arc::new(|_, _, _| StubResponse {
-            status: 429, body: "{}".into(),
+            status: 429,
+            body: "{}".into(),
             headers: vec![("Retry-After".into(), "0".into())],
             delay_ms: 0,
         }));
         let provider = NvidiaNimProvider::new(test_config(&base, "sk-test"));
         let req = PlanRequest {
             system_prompt: "x".into(),
-            messages: vec![ChatMessage { role: "user".into(), content: "y".into(), image_url: None }],
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: "y".into(),
+                image_url: None,
+            }],
             json_schema: None,
             max_tokens: 5,
             temperature: 0.0,
         };
-        let err = provider.complete(&req, &AtomicBool::new(false)).unwrap_err();
+        let err = provider
+            .complete(&req, &AtomicBool::new(false))
+            .unwrap_err();
         assert!(matches!(err, AiError::RateLimited));
         let made = counter.load(Ordering::SeqCst);
         assert!(made >= 3, "must retry on 429, made {made}");
@@ -168,17 +245,26 @@ mod tests {
     #[test]
     fn http_500_retries_then_provider_error() {
         let (base, counter) = spawn(Arc::new(|_, _, _| StubResponse {
-            status: 500, body: "{\"error\":\"internal\"}".into(), headers: vec![], delay_ms: 0,
+            status: 500,
+            body: "{\"error\":\"internal\"}".into(),
+            headers: vec![],
+            delay_ms: 0,
         }));
         let provider = NvidiaNimProvider::new(test_config(&base, "sk-test"));
         let req = PlanRequest {
             system_prompt: "x".into(),
-            messages: vec![ChatMessage { role: "user".into(), content: "y".into(), image_url: None }],
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: "y".into(),
+                image_url: None,
+            }],
             json_schema: None,
             max_tokens: 5,
             temperature: 0.0,
         };
-        let err = provider.complete(&req, &AtomicBool::new(false)).unwrap_err();
+        let err = provider
+            .complete(&req, &AtomicBool::new(false))
+            .unwrap_err();
         assert!(matches!(err, AiError::Provider(_)), "{err:?}");
         assert!(counter.load(Ordering::SeqCst) >= 3);
     }
@@ -186,7 +272,10 @@ mod tests {
     #[test]
     fn slow_response_maps_to_timeout() {
         let (base, _) = spawn(Arc::new(|_, _, _| StubResponse {
-            status: 200, body: "{}".into(), headers: vec![], delay_ms: 3000,
+            status: 200,
+            body: "{}".into(),
+            headers: vec![],
+            delay_ms: 3000,
         }));
         let provider = NvidiaNimProvider::new(test_config(&base, "sk-test"));
         let err = provider.test_connection().unwrap_err();
@@ -196,10 +285,16 @@ mod tests {
     #[test]
     fn model_404_maps_to_model_unavailable() {
         let (base, _) = spawn(Arc::new(|_, _, _| StubResponse {
-            status: 404, body: "{}".into(), headers: vec![], delay_ms: 0,
+            status: 404,
+            body: "{}".into(),
+            headers: vec![],
+            delay_ms: 0,
         }));
         let provider = NvidiaNimProvider::new(test_config(&base, "sk-test"));
-        assert!(matches!(provider.test_connection(), Err(AiError::ModelUnavailable)));
+        assert!(matches!(
+            provider.test_connection(),
+            Err(AiError::ModelUnavailable)
+        ));
     }
 
     #[test]
@@ -212,24 +307,48 @@ mod tests {
         let (base, _) = spawn(Arc::new(move |_, _, _| {
             let mut plan: serde_json::Value = serde_json::from_str(VALID_PLAN_JSON).unwrap();
             plan["intent_summary"] = serde_json::Value::String(injection.to_string());
-            StubResponse { status: 200, body: ok_response(&plan.to_string()), headers: vec![], delay_ms: 0 }
+            StubResponse {
+                status: 200,
+                body: ok_response(&plan.to_string()),
+                headers: vec![],
+                delay_ms: 0,
+            }
         }));
         let provider = NvidiaNimProvider::new(test_config(&base, "sk-test"));
         let (mut p, mut h) = project_with_source();
         let mut s = summary();
         s.transcript = vec![(0.0, 60.0, injection.into())];
-        let outcome = plan_and_apply(&provider, &mut p, &mut h, &schema_ctx(), &s, false, &AtomicBool::new(false));
+        let outcome = plan_and_apply(
+            &provider,
+            &mut p,
+            &mut h,
+            &schema_ctx(),
+            &s,
+            false,
+            &AtomicBool::new(false),
+        );
         assert!(outcome.applied, "{outcome:?}");
         // Cut 12-16s per plan (two segments), NOT the injected delete-everything.
-        assert_eq!(p.tracks[0].items.len(), 2, "plan cut applied, injection ignored");
-        let total: i64 = p.tracks[0].items.iter().map(|i| i.timeline_duration_ms).sum();
+        assert_eq!(
+            p.tracks[0].items.len(),
+            2,
+            "plan cut applied, injection ignored"
+        );
+        let total: i64 = p.tracks[0]
+            .items
+            .iter()
+            .map(|i| i.timeline_duration_ms)
+            .sum();
         assert_eq!(total, 56_000, "exactly 4s removed per the real plan");
     }
 
     #[test]
     fn cancellation_stops_request() {
         let (base, _) = spawn(Arc::new(|_, _, _| StubResponse {
-            status: 200, body: "{}".into(), headers: vec![], delay_ms: 3000,
+            status: 200,
+            body: "{}".into(),
+            headers: vec![],
+            delay_ms: 3000,
         }));
         let provider = NvidiaNimProvider::new(test_config(&base, "sk-test"));
         let cancel = AtomicBool::new(true);
@@ -245,23 +364,39 @@ mod tests {
         let Ok(key) = std::env::var("NVIDIA_NIM_API_KEY") else {
             return;
         };
-        let cfg = NimConfig { api_key: key, ..NimConfig::default() };
+        let cfg = NimConfig {
+            api_key: key,
+            ..NimConfig::default()
+        };
         let provider = NvidiaNimProvider::new(cfg);
         provider.test_connection().expect("connection should work");
         let (mut p, mut h) = project_with_source();
-        let outcome = plan_and_apply(&provider, &mut p, &mut h, &schema_ctx(), &summary(), false, &AtomicBool::new(false));
+        let outcome = plan_and_apply(
+            &provider,
+            &mut p,
+            &mut h,
+            &schema_ctx(),
+            &summary(),
+            false,
+            &AtomicBool::new(false),
+        );
         assert!(outcome.applied, "live plan must validate: {outcome:?}");
     }
 }
 
-use provider::NvidiaNimProvider as _NimImport;
-
 impl NvidiaNimProvider {
     /// Test-connection honoring a cancel flag (used by tests + Settings UI).
-    pub fn test_connection_cancellable(&self, cancel: &std::sync::atomic::AtomicBool) -> Result<(), AiError> {
+    pub fn test_connection_cancellable(
+        &self,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<(), AiError> {
         let req = PlanRequest {
             system_prompt: "health check".into(),
-            messages: vec![ChatMessage { role: "user".into(), content: "ping".into(), image_url: None }],
+            messages: vec![ChatMessage {
+                role: "user".into(),
+                content: "ping".into(),
+                image_url: None,
+            }],
             json_schema: None,
             max_tokens: 5,
             temperature: 0.0,

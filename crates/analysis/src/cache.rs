@@ -15,7 +15,10 @@ impl Cache {
     #[must_use]
     pub fn new(dir: &Path, max_bytes: u64) -> Self {
         let _ = fs::create_dir_all(dir);
-        Self { dir: dir.to_path_buf(), max_bytes }
+        Self {
+            dir: dir.to_path_buf(),
+            max_bytes,
+        }
     }
 
     /// Stable key from content hash + named parameters.
@@ -43,9 +46,13 @@ impl Cache {
         let p = self.path(key);
         let bytes = fs::read(&p).ok()?;
         // Touch for LRU (mtime update is best-effort).
-        let _ = fs::File::open(&p).and_then(|f| f.set_times(
-            std::fs::FileTimes::new().set_accessed(std::time::SystemTime::now()).set_modified(std::time::SystemTime::now()),
-        ));
+        let _ = fs::File::open(&p).and_then(|f| {
+            f.set_times(
+                std::fs::FileTimes::new()
+                    .set_accessed(std::time::SystemTime::now())
+                    .set_modified(std::time::SystemTime::now()),
+            )
+        });
         serde_json::from_slice(&bytes).ok()
     }
 
@@ -150,7 +157,10 @@ mod tests {
     use super::*;
 
     fn params(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]
@@ -167,7 +177,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cache = Cache::new(dir.path(), 10_000_000);
         let key = Cache::key("h", &params(&[("x", "1")]));
-        cache.put(&key, &serde_json::json!({"scenes": [1, 2]})).unwrap();
+        cache
+            .put(&key, &serde_json::json!({"scenes": [1, 2]}))
+            .unwrap();
         let got: Option<serde_json::Value> = cache.get(&key);
         assert_eq!(got, Some(serde_json::json!({"scenes": [1, 2]})));
     }
@@ -181,7 +193,11 @@ mod tests {
             cache.put(&key, &vec![0u8; 1000]).unwrap();
             std::thread::sleep(std::time::Duration::from_millis(5)); // distinct mtimes
         }
-        assert!(cache.size_bytes() < 5_500, "cache must evict under cap, got {}", cache.size_bytes());
+        assert!(
+            cache.size_bytes() < 5_500,
+            "cache must evict under cap, got {}",
+            cache.size_bytes()
+        );
     }
 
     #[test]

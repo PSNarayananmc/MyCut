@@ -80,18 +80,24 @@ mod tests {
 
     #[test]
     fn timestamps_outside_source_rejected() {
-        let plan = EditPlan::parse(r#"{ "schema_version": "1.0", "intent_summary": "x",
+        let plan = EditPlan::parse(
+            r#"{ "schema_version": "1.0", "intent_summary": "x",
             "operations": [ { "op": "cut_ranges", "strategy": "explicit",
-              "ranges": [{ "start": 30.0, "end": 90.0 }] } ] }"#).unwrap();
+              "ranges": [{ "start": 30.0, "end": 90.0 }] } ] }"#,
+        )
+        .unwrap();
         let (_, v) = validate_plan(&plan, &ctx());
         assert!(!v.errors.is_empty());
     }
 
     #[test]
     fn tiny_overshoot_is_autorepaired() {
-        let plan = EditPlan::parse(r#"{ "schema_version": "1.0", "intent_summary": "x",
+        let plan = EditPlan::parse(
+            r#"{ "schema_version": "1.0", "intent_summary": "x",
             "operations": [ { "op": "cut_ranges", "strategy": "explicit",
-              "ranges": [{ "start": 59.99, "end": 60.01 }] } ] }"#).unwrap();
+              "ranges": [{ "start": 59.99, "end": 60.01 }] } ] }"#,
+        )
+        .unwrap();
         let (validated, v) = validate_plan(&plan, &ctx());
         assert!(validated.is_some());
         assert!(!v.repairs.is_empty(), "clamp must be recorded");
@@ -99,20 +105,29 @@ mod tests {
 
     #[test]
     fn big_overshoot_rejected() {
-        let plan = EditPlan::parse(r#"{ "schema_version": "1.0", "intent_summary": "x",
+        let plan = EditPlan::parse(
+            r#"{ "schema_version": "1.0", "intent_summary": "x",
             "operations": [ { "op": "cut_ranges", "strategy": "explicit",
-              "ranges": [{ "start": 10.0, "end": 70.0 }] } ] }"#).unwrap();
+              "ranges": [{ "start": 10.0, "end": 70.0 }] } ] }"#,
+        )
+        .unwrap();
         let (_, v) = validate_plan(&plan, &ctx());
         assert!(!v.errors.is_empty());
     }
 
     #[test]
     fn out_of_range_params_rejected() {
-        let plan = EditPlan::parse(r#"{ "schema_version": "1.0", "intent_summary": "x",
+        let plan = EditPlan::parse(
+            r#"{ "schema_version": "1.0", "intent_summary": "x",
             "operations": [ { "op": "add_effect", "effect": "zoom_punch", "start": 1.0, "end": 2.0,
-              "params": { "strength": 9.9 } } ] }"#).unwrap();
+              "params": { "strength": 9.9 } } ] }"#,
+        )
+        .unwrap();
         let (_, v) = validate_plan(&plan, &ctx());
-        assert!(v.errors.iter().any(|e| matches!(e, PlanError::OutOfRange { .. })));
+        assert!(v
+            .errors
+            .iter()
+            .any(|e| matches!(e, PlanError::OutOfRange { .. })));
     }
 
     #[test]
@@ -128,7 +143,10 @@ mod tests {
         let plan = EditPlan::parse(r#"{ "schema_version": "1.0", "intent_summary": "x",
             "operations": [ { "op": "set_color", "params": { "lut": "../../../etc/evil.cube" } } ] }"#).unwrap();
         let (_, v) = validate_plan(&plan, &ctx());
-        assert!(v.errors.iter().any(|e| matches!(e, PlanError::UnsafePath { .. })));
+        assert!(v
+            .errors
+            .iter()
+            .any(|e| matches!(e, PlanError::UnsafePath { .. })));
     }
 
     #[test]
@@ -141,9 +159,12 @@ mod tests {
 
     #[test]
     fn overlapping_cuts_rejected() {
-        let plan = EditPlan::parse(r#"{ "schema_version": "1.0", "intent_summary": "x",
+        let plan = EditPlan::parse(
+            r#"{ "schema_version": "1.0", "intent_summary": "x",
             "operations": [ { "op": "cut_ranges", "strategy": "explicit",
-              "ranges": [{ "start": 10.0, "end": 15.0 }, { "start": 14.0, "end": 20.0 }] } ] }"#).unwrap();
+              "ranges": [{ "start": 10.0, "end": 15.0 }, { "start": 14.0, "end": 20.0 }] } ] }"#,
+        )
+        .unwrap();
         let (_, v) = validate_plan(&plan, &ctx());
         assert!(!v.errors.is_empty(), "overlaps must be rejected");
     }
@@ -151,33 +172,54 @@ mod tests {
     #[test]
     fn mid_sentence_cut_warns() {
         // Transcript 1..3; cut 1.5..2.0 splits it.
-        let plan = EditPlan::parse(r#"{ "schema_version": "1.0", "intent_summary": "x",
+        let plan = EditPlan::parse(
+            r#"{ "schema_version": "1.0", "intent_summary": "x",
             "operations": [ { "op": "cut_ranges", "strategy": "explicit",
-              "ranges": [{ "start": 1.5, "end": 2.0 }] } ] }"#).unwrap();
+              "ranges": [{ "start": 1.5, "end": 2.0 }] } ] }"#,
+        )
+        .unwrap();
         let (_, v) = validate_plan(&plan, &ctx());
-        assert!(v.warnings.iter().any(|w| w.contains("splits a spoken sentence")));
+        assert!(v
+            .warnings
+            .iter()
+            .any(|w| w.contains("splits a spoken sentence")));
     }
 
     #[test]
     fn blur_transition_rejected_honestly() {
-        let plan = EditPlan::parse(r#"{ "schema_version": "1.0", "intent_summary": "x",
-            "operations": [ { "op": "add_transition", "transition": "blur", "duration": 0.5 } ] }"#).unwrap();
+        let plan = EditPlan::parse(
+            r#"{ "schema_version": "1.0", "intent_summary": "x",
+            "operations": [ { "op": "add_transition", "transition": "blur", "duration": 0.5 } ] }"#,
+        )
+        .unwrap();
         let (_, v) = validate_plan(&plan, &ctx());
-        assert!(v.errors.iter().any(|e| e.to_string().contains("not available")));
+        assert!(v
+            .errors
+            .iter()
+            .any(|e| e.to_string().contains("not available")));
     }
 
     #[test]
     fn speed_range_enforced() {
-        let plan = EditPlan::parse(r#"{ "schema_version": "1.0", "intent_summary": "x",
-            "operations": [ { "op": "set_speed", "start": 0.0, "end": 5.0, "speed": 10.0 } ] }"#).unwrap();
+        let plan = EditPlan::parse(
+            r#"{ "schema_version": "1.0", "intent_summary": "x",
+            "operations": [ { "op": "set_speed", "start": 0.0, "end": 5.0, "speed": 10.0 } ] }"#,
+        )
+        .unwrap();
         let (_, v) = validate_plan(&plan, &ctx());
-        assert!(v.errors.iter().any(|e| matches!(e, PlanError::OutOfRange { .. })));
+        assert!(v
+            .errors
+            .iter()
+            .any(|e| matches!(e, PlanError::OutOfRange { .. })));
     }
 
     #[test]
     fn needs_clarification_without_ops_ok() {
-        let plan = EditPlan::parse(r#"{ "schema_version": "1.0", "intent_summary": "x",
-            "needs_clarification": "Which clip should I shorten?" }"#).unwrap();
+        let plan = EditPlan::parse(
+            r#"{ "schema_version": "1.0", "intent_summary": "x",
+            "needs_clarification": "Which clip should I shorten?" }"#,
+        )
+        .unwrap();
         let (validated, v) = validate_plan(&plan, &ctx());
         assert!(validated.is_some(), "{:?}", v.errors);
         assert!(v.errors.is_empty());
@@ -185,7 +227,8 @@ mod tests {
 
     #[test]
     fn empty_plan_rejected() {
-        let plan = EditPlan::parse(r#"{ "schema_version": "1.0", "intent_summary": "x" }"#).unwrap();
+        let plan =
+            EditPlan::parse(r#"{ "schema_version": "1.0", "intent_summary": "x" }"#).unwrap();
         let (_, v) = validate_plan(&plan, &ctx());
         assert!(!v.errors.is_empty());
     }
@@ -208,9 +251,12 @@ mod tests {
             "id": "src_1", "name": "c.mp4", "rel_path": "media/c.mp4", "content_hash": "h",
             "duration_ms": 60_000, "width": 1280, "height": 720,
             "fps_num": 30, "fps_den": 1, "has_audio": true, "role": "footage"
-        })).unwrap();
+        }))
+        .unwrap();
         let mut history = mycut_core::History::new();
-        history.apply(&mut project, mycut_core::Command::AddSource { source }).unwrap();
+        history
+            .apply(&mut project, mycut_core::Command::AddSource { source })
+            .unwrap();
         let plan = EditPlan::parse(GOOD_PLAN).unwrap();
         let app = plan_to_commands(&plan, &mut project, &mut history, &ctx()).unwrap();
         assert!(!app.summary_parts.is_empty());
@@ -230,9 +276,12 @@ mod tests {
             "id": "src_1", "name": "c.mp4", "rel_path": "media/c.mp4", "content_hash": "h",
             "duration_ms": 60_000, "width": 1280, "height": 720,
             "fps_num": 30, "fps_den": 1, "has_audio": true, "role": "footage"
-        })).unwrap();
+        }))
+        .unwrap();
         let mut history = mycut_core::History::new();
-        history.apply(&mut project, mycut_core::Command::AddSource { source }).unwrap();
+        history
+            .apply(&mut project, mycut_core::Command::AddSource { source })
+            .unwrap();
 
         let p1 = EditPlan::parse(r#"{ "schema_version": "1.0", "intent_summary": "x",
             "operations": [
@@ -243,11 +292,17 @@ mod tests {
         assert_eq!(project.color.saturation, 1.2);
 
         // Follow-up "more dramatic" modifies existing color instead of replacing.
-        let p2 = EditPlan::parse(r#"{ "schema_version": "1.0", "intent_summary": "more dramatic",
-            "operations": [ { "op": "set_color", "params": { "saturation": 1.5 } } ] }"#).unwrap();
+        let p2 = EditPlan::parse(
+            r#"{ "schema_version": "1.0", "intent_summary": "more dramatic",
+            "operations": [ { "op": "set_color", "params": { "saturation": 1.5 } } ] }"#,
+        )
+        .unwrap();
         plan_to_commands(&p2, &mut project, &mut history, &ctx()).unwrap();
         assert_eq!(project.color.saturation, 1.5);
-        assert_eq!(project.color.temperature, 0.3, "merge preserves prior fields");
+        assert_eq!(
+            project.color.temperature, 0.3,
+            "merge preserves prior fields"
+        );
         assert_eq!(project.tracks[0].items[0].effects.len(), 1, "vignette kept");
     }
 }

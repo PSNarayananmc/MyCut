@@ -27,7 +27,10 @@ mod tests {
 
     #[test]
     fn engine_resolves_ffmpeg() {
-        assert!(RenderEngine::new().is_ok(), "ffmpeg must be on PATH for engine tests");
+        assert!(
+            RenderEngine::new().is_ok(),
+            "ffmpeg must be on PATH for engine tests"
+        );
     }
 
     #[test]

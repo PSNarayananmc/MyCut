@@ -3,8 +3,8 @@
 
 use mycut_core::ColorGrade;
 
-use crate::escape::escape_filter_value;
 use crate::error::EngineError;
+use crate::escape::escape_filter_value;
 
 /// Build the color chain for one video piece. Applies in this order:
 /// exposure/contrast/saturation/gamma (eq) -> temperature (colorbalance) ->
@@ -13,7 +13,10 @@ use crate::error::EngineError;
 /// # Errors
 /// [`EngineError::Param`] for out-of-range values (double check) or a LUT
 /// path that escapes the jail (path must be pre-validated by caller).
-pub fn build_color_chain(grade: &ColorGrade, lut_jail_check: &dyn Fn(&str) -> bool) -> Result<String, EngineError> {
+pub fn build_color_chain(
+    grade: &ColorGrade,
+    lut_jail_check: &dyn Fn(&str) -> bool,
+) -> Result<String, EngineError> {
     if grade.is_neutral() {
         return Ok(String::new());
     }
@@ -23,13 +26,19 @@ pub fn build_color_chain(grade: &ColorGrade, lut_jail_check: &dyn Fn(&str) -> bo
     let mut eq: Vec<String> = Vec::new();
     if grade.exposure.abs() > 0.01 {
         // Exposure stops -> eq brightness approx (documented mapping).
-        eq.push(format!("brightness={:.3}", (grade.exposure * 0.4).clamp(-1.0, 1.0)));
+        eq.push(format!(
+            "brightness={:.3}",
+            (grade.exposure * 0.4).clamp(-1.0, 1.0)
+        ));
     }
     if (grade.contrast - 1.0).abs() > 0.01 {
         eq.push(format!("contrast={:.3}", grade.contrast.clamp(0.1, 3.0)));
     }
     if (grade.saturation - 1.0).abs() > 0.01 {
-        eq.push(format!("saturation={:.3}", grade.saturation.clamp(0.0, 3.0)));
+        eq.push(format!(
+            "saturation={:.3}",
+            grade.saturation.clamp(0.0, 3.0)
+        ));
     }
     if (grade.gamma - 1.0).abs() > 0.01 {
         eq.push(format!("gamma={:.3}", grade.gamma.clamp(0.1, 3.0)));
@@ -46,14 +55,19 @@ pub fn build_color_chain(grade: &ColorGrade, lut_jail_check: &dyn Fn(&str) -> bo
 
     // Vibrance filter (intensity -2..2; we map plan range -1..1).
     if grade.vibrance.abs() > 0.01 {
-        parts.push(format!("vibrance=intensity={:.3}", grade.vibrance.clamp(-1.0, 1.0)));
+        parts.push(format!(
+            "vibrance=intensity={:.3}",
+            grade.vibrance.clamp(-1.0, 1.0)
+        ));
     }
 
     // LUT with intensity via split + blend.
     if let Some(lut) = &grade.lut {
         if !lut.is_empty() {
             if !lut_jail_check(lut) {
-                return Err(EngineError::UnsafePath(format!("LUT path escapes jail: {lut}")));
+                return Err(EngineError::UnsafePath(format!(
+                    "LUT path escapes jail: {lut}"
+                )));
             }
             let escaped = escape_filter_value(lut);
             let intensity = grade.lut_intensity.clamp(0.0, 1.0);
@@ -83,7 +97,10 @@ mod tests {
 
     #[test]
     fn neutral_grade_is_empty() {
-        assert_eq!(build_color_chain(&ColorGrade::default(), &ok_jail).unwrap(), "");
+        assert_eq!(
+            build_color_chain(&ColorGrade::default(), &ok_jail).unwrap(),
+            ""
+        );
     }
 
     #[test]
@@ -98,24 +115,41 @@ mod tests {
             ..Default::default()
         };
         let s = build_color_chain(&g, &ok_jail).unwrap();
-        assert!(s.contains("eq=brightness=0.200:contrast=1.100:saturation=1.300:gamma=1.050"), "{s}");
+        assert!(
+            s.contains("eq=brightness=0.200:contrast=1.100:saturation=1.300:gamma=1.050"),
+            "{s}"
+        );
         assert!(s.contains("colorbalance=rs=0.120:bs=-0.120"), "{s}");
         assert!(s.contains("vibrance=intensity=0.200"), "{s}");
     }
 
     #[test]
     fn lut_full_and_partial_intensity() {
-        let g = ColorGrade { lut: Some("/app/luts/warm.cube".into()), lut_intensity: 1.0, ..Default::default() };
+        let g = ColorGrade {
+            lut: Some("/app/luts/warm.cube".into()),
+            lut_intensity: 1.0,
+            ..Default::default()
+        };
         let s = build_color_chain(&g, &ok_jail).unwrap();
         assert!(s.starts_with("lut3d=file='"), "{s}");
-        let g2 = ColorGrade { lut: Some("warm.cube".into()), lut_intensity: 0.4, ..Default::default() };
+        let g2 = ColorGrade {
+            lut: Some("warm.cube".into()),
+            lut_intensity: 0.4,
+            ..Default::default()
+        };
         let s2 = build_color_chain(&g2, &ok_jail).unwrap();
-        assert!(s2.contains("blend=all_mode=normal:all_opacity=0.400"), "{s2}");
+        assert!(
+            s2.contains("blend=all_mode=normal:all_opacity=0.400"),
+            "{s2}"
+        );
     }
 
     #[test]
     fn lut_outside_jail_rejected() {
-        let g = ColorGrade { lut: Some("../../etc/passwd.cube".into()), ..Default::default() };
+        let g = ColorGrade {
+            lut: Some("../../etc/passwd.cube".into()),
+            ..Default::default()
+        };
         assert!(matches!(
             build_color_chain(&g, &bad_jail),
             Err(EngineError::UnsafePath(_))

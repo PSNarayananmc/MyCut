@@ -48,7 +48,10 @@ pub fn spawn(handler: Handler) -> (String, Arc<AtomicU32>) {
                         headers.insert(k.trim().to_lowercase(), v.trim().to_string());
                     }
                 }
-                let len: usize = headers.get("content-length").and_then(|v| v.parse().ok()).unwrap_or(0);
+                let len: usize = headers
+                    .get("content-length")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
                 let mut body = vec![0u8; len];
                 if len > 0 {
                     let _ = reader.read_exact(&mut body);

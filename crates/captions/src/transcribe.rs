@@ -22,7 +22,11 @@ pub trait Transcriber: Send + Sync {
     ///
     /// # Errors
     /// [`TranscribeError`] surfaced to the UI verbatim.
-    fn transcribe(&self, media: &std::path::Path, cancel: &std::sync::atomic::AtomicBool) -> Result<Vec<TimedWord>, TranscribeError>;
+    fn transcribe(
+        &self,
+        media: &std::path::Path,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Vec<TimedWord>, TranscribeError>;
     fn name(&self) -> &'static str;
 }
 
@@ -37,7 +41,7 @@ pub struct WhisperCppTranscriber {
 }
 
 #[derive(Debug, Deserialize)]
-struct WhisperFullJson {
+pub struct WhisperFullJson {
     #[serde(default)]
     transcription: Vec<WhisperSegment>,
 }
@@ -62,16 +66,22 @@ struct WhisperOffsets {
 }
 
 impl Transcriber for WhisperCppTranscriber {
-    fn transcribe(&self, media: &std::path::Path, cancel: &std::sync::atomic::AtomicBool) -> Result<Vec<TimedWord>, TranscribeError> {
+    fn transcribe(
+        &self,
+        media: &std::path::Path,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Vec<TimedWord>, TranscribeError> {
         if !self.binary.exists() || !self.model.exists() {
             return Err(TranscribeError::NotConfigured);
         }
         // whisper.cpp needs 16 kHz WAV; produce a temp wav first (throwaway).
         let tmp = tempfile::tempdir()?;
         let wav = tmp.path().join("in.wav");
-        let ffmpeg = which_ffmpeg().ok_or_else(|| TranscribeError::Failed("ffmpeg not found".into()))?;
+        let ffmpeg =
+            which_ffmpeg().ok_or_else(|| TranscribeError::Failed("ffmpeg not found".into()))?;
         let mut cmd = std::process::Command::new(ffmpeg);
-        cmd.args(["-hide_banner", "-y", "-i"]).arg(media)
+        cmd.args(["-hide_banner", "-y", "-i"])
+            .arg(media)
             .args(["-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le"])
             .arg(&wav)
             .stdin(std::process::Stdio::null())
@@ -86,10 +96,13 @@ impl Transcriber for WhisperCppTranscriber {
         }
         let out_json = tmp.path().join("out.json");
         let mut args: Vec<std::ffi::OsString> = vec![
-            "-m".into(), self.model.clone().into(),
-            "-f".into(), wav.clone().into_os_string(),
+            "-m".into(),
+            self.model.clone().into(),
+            "-f".into(),
+            wav.clone().into_os_string(),
             "--output-json-full".into(),
-            "--print-progress".into(), "false".into(),
+            "--print-progress".into(),
+            "false".into(),
         ];
         if let Some(lang) = &self.language {
             args.push("--language".into());
@@ -101,7 +114,9 @@ impl Transcriber for WhisperCppTranscriber {
             .stdin(std::process::Stdio::null())
             .status()?;
         if !st.success() {
-            return Err(TranscribeError::Failed("whisper.cpp exited with an error".into()));
+            return Err(TranscribeError::Failed(
+                "whisper.cpp exited with an error".into(),
+            ));
         }
         let bytes = std::fs::read(&out_json)?;
         let parsed: WhisperFullJson = serde_json::from_slice(&bytes)
@@ -122,7 +137,9 @@ fn which_ffmpeg() -> Option<std::path::PathBuf> {
         }
     }
     let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).map(|d| d.join("ffmpeg")).find(|c| c.is_file())
+    std::env::split_paths(&path)
+        .map(|d| d.join("ffmpeg"))
+        .find(|c| c.is_file())
 }
 
 /// Pure conversion: whisper.cpp full JSON -> TimedWords (drop special tokens).
@@ -192,7 +209,10 @@ mod tests {
             model: "/nonexistent/model.bin".into(),
             language: None,
         };
-        let r = t.transcribe(std::path::Path::new("/dev/null"), &std::sync::atomic::AtomicBool::new(false));
+        let r = t.transcribe(
+            std::path::Path::new("/dev/null"),
+            &std::sync::atomic::AtomicBool::new(false),
+        );
         assert!(matches!(r, Err(TranscribeError::NotConfigured)));
     }
 }

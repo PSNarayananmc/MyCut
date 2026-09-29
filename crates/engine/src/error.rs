@@ -15,7 +15,11 @@ pub enum EngineError {
     #[error("unsafe path rejected: {0}")]
     UnsafePath(String),
     #[error("invalid parameter {name}={value}: {reason}")]
-    Param { name: String, value: String, reason: String },
+    Param {
+        name: String,
+        value: String,
+        reason: String,
+    },
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
     #[error("serialization error: {0}")]

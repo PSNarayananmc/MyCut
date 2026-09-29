@@ -25,17 +25,28 @@ pub struct AudioEffectDefinition {
 ///
 /// # Errors
 /// [`crate::error::EngineError::Param`] for unknown effects.
-pub fn build_audio_effect(def_id: &str, params: &BTreeMap<String, ParamValue>, piece_end_s: f64) -> Result<String, crate::error::EngineError> {
+pub fn build_audio_effect(
+    def_id: &str,
+    params: &BTreeMap<String, ParamValue>,
+    piece_end_s: f64,
+) -> Result<String, crate::error::EngineError> {
     let num = |k: &str, d: f64| -> f64 {
-        params.get(k).map(|v| match v {
-            ParamValue::Number(n) => *n,
-            ParamValue::Text(t) => t.parse().unwrap_or(d),
-        }).unwrap_or(d)
+        params
+            .get(k)
+            .map(|v| match v {
+                ParamValue::Number(n) => *n,
+                ParamValue::Text(t) => t.parse().unwrap_or(d),
+            })
+            .unwrap_or(d)
     };
     let s = match def_id {
         "volume" => {
             let v = num("volume", 1.0).clamp(0.0, 4.0);
-            if (v - 1.0).abs() < 0.001 { String::new() } else { format!("volume={v:.3}") }
+            if (v - 1.0).abs() < 0.001 {
+                String::new()
+            } else {
+                format!("volume={v:.3}")
+            }
         }
         "normalize" => {
             let i = num("target_lufs", -16.0).clamp(-30.0, -8.0);
@@ -48,14 +59,20 @@ pub fn build_audio_effect(def_id: &str, params: &BTreeMap<String, ParamValue>, p
         "remove_silence" => {
             let min_s = num("min_silence", 0.5).clamp(0.05, 10.0);
             let thr = num("threshold_db", -35.0).clamp(-60.0, -20.0);
-            format!("silenceremove=stop_periods=-1:stop_duration={min_s:.2}:stop_threshold={thr:.0}dB")
+            format!(
+                "silenceremove=stop_periods=-1:stop_duration={min_s:.2}:stop_threshold={thr:.0}dB"
+            )
         }
         "fade_in" => {
-            let d = num("duration", 0.5).clamp(0.05, 10.0).min(piece_end_s.max(0.1));
+            let d = num("duration", 0.5)
+                .clamp(0.05, 10.0)
+                .min(piece_end_s.max(0.1));
             format!("afade=t=in:st=0:d={d:.2}")
         }
         "fade_out" => {
-            let d = num("duration", 0.8).clamp(0.05, 10.0).min(piece_end_s.max(0.1));
+            let d = num("duration", 0.8)
+                .clamp(0.05, 10.0)
+                .min(piece_end_s.max(0.1));
             format!("afade=t=out:st={:.2}:d={d:.2}", (piece_end_s - d).max(0.0))
         }
         "compressor" => "acompressor=threshold=-20dB:ratio=4:attack=10:release=200".into(),
@@ -74,17 +91,58 @@ pub fn build_audio_effect(def_id: &str, params: &BTreeMap<String, ParamValue>, p
 #[must_use]
 pub fn registry() -> Vec<AudioEffectDefinition> {
     fn p(name: &str, label: &str, default: f64, min: f64, max: f64) -> AudioParam {
-        AudioParam { name: name.into(), label: label.into(), default, min, max }
+        AudioParam {
+            name: name.into(),
+            label: label.into(),
+            default,
+            min,
+            max,
+        }
     }
     vec![
-        AudioEffectDefinition { def_id: "volume".into(), label: "Volume".into(), params: vec![p("volume", "Linear gain", 1.0, 0.0, 4.0)] },
-        AudioEffectDefinition { def_id: "normalize".into(), label: "Normalize (EBU R128)".into(), params: vec![p("target_lufs", "Target LUFS", -16.0, -30.0, -8.0)] },
-        AudioEffectDefinition { def_id: "denoise".into(), label: "Denoise (afftdn)".into(), params: vec![p("strength", "Strength", 12.0, 0.01, 60.0)] },
-        AudioEffectDefinition { def_id: "remove_silence".into(), label: "Remove silence".into(), params: vec![p("min_silence", "Min silence (s)", 0.5, 0.05, 10.0), p("threshold_db", "Threshold (dB)", -35.0, -60.0, -20.0)] },
-        AudioEffectDefinition { def_id: "fade_in".into(), label: "Fade in".into(), params: vec![p("duration", "Duration (s)", 0.5, 0.05, 10.0)] },
-        AudioEffectDefinition { def_id: "fade_out".into(), label: "Fade out".into(), params: vec![p("duration", "Duration (s)", 0.8, 0.05, 10.0)] },
-        AudioEffectDefinition { def_id: "compressor".into(), label: "Compressor".into(), params: vec![] },
-        AudioEffectDefinition { def_id: "limiter".into(), label: "Limiter".into(), params: vec![] },
+        AudioEffectDefinition {
+            def_id: "volume".into(),
+            label: "Volume".into(),
+            params: vec![p("volume", "Linear gain", 1.0, 0.0, 4.0)],
+        },
+        AudioEffectDefinition {
+            def_id: "normalize".into(),
+            label: "Normalize (EBU R128)".into(),
+            params: vec![p("target_lufs", "Target LUFS", -16.0, -30.0, -8.0)],
+        },
+        AudioEffectDefinition {
+            def_id: "denoise".into(),
+            label: "Denoise (afftdn)".into(),
+            params: vec![p("strength", "Strength", 12.0, 0.01, 60.0)],
+        },
+        AudioEffectDefinition {
+            def_id: "remove_silence".into(),
+            label: "Remove silence".into(),
+            params: vec![
+                p("min_silence", "Min silence (s)", 0.5, 0.05, 10.0),
+                p("threshold_db", "Threshold (dB)", -35.0, -60.0, -20.0),
+            ],
+        },
+        AudioEffectDefinition {
+            def_id: "fade_in".into(),
+            label: "Fade in".into(),
+            params: vec![p("duration", "Duration (s)", 0.5, 0.05, 10.0)],
+        },
+        AudioEffectDefinition {
+            def_id: "fade_out".into(),
+            label: "Fade out".into(),
+            params: vec![p("duration", "Duration (s)", 0.8, 0.05, 10.0)],
+        },
+        AudioEffectDefinition {
+            def_id: "compressor".into(),
+            label: "Compressor".into(),
+            params: vec![],
+        },
+        AudioEffectDefinition {
+            def_id: "limiter".into(),
+            label: "Limiter".into(),
+            params: vec![],
+        },
     ]
 }
 
@@ -126,12 +184,20 @@ mod tests {
 
     #[test]
     fn volume_neutral_is_empty() {
-        assert_eq!(build_audio_effect("volume", &BTreeMap::new(), 10.0).unwrap(), "");
+        assert_eq!(
+            build_audio_effect("volume", &BTreeMap::new(), 10.0).unwrap(),
+            ""
+        );
     }
 
     #[test]
     fn master_chain_order() {
-        let m = AudioMaster { normalize: true, denoise: true, fade_out_s: 1.0, ..Default::default() };
+        let m = AudioMaster {
+            normalize: true,
+            denoise: true,
+            fade_out_s: 1.0,
+            ..Default::default()
+        };
         let s = build_master_chain(&m, 30.0);
         let den = s.find("afftdn").unwrap();
         let nor = s.find("loudnorm").unwrap();

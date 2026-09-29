@@ -236,10 +236,16 @@ impl Item {
     #[must_use]
     pub fn source_len_ms(&self) -> Option<TimeMs> {
         match &self.kind {
-            ItemKind::VideoClip { source_in_ms, source_out_ms, .. }
-            | ItemKind::AudioClip { source_in_ms, source_out_ms, .. } => {
-                Some((source_out_ms - source_in_ms).max(0))
+            ItemKind::VideoClip {
+                source_in_ms,
+                source_out_ms,
+                ..
             }
+            | ItemKind::AudioClip {
+                source_in_ms,
+                source_out_ms,
+                ..
+            } => Some((source_out_ms - source_in_ms).max(0)),
             _ => None,
         }
     }

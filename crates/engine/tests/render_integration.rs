@@ -45,11 +45,26 @@ impl Workspace {
     fn fixture_color(&self, name: &str, color: &str, seconds: u32) -> PathBuf {
         let p = self.media(name);
         self.run_ffmpeg(&[
-            "-y", "-f", "lavfi", "-i", &format!("color=c={color}:s=160x90:r=30"),
-            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
-            "-t", &seconds.to_string(),
-            "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast",
-            "-c:a", "aac", p.to_str().unwrap(),
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            &format!("color=c={color}:s=160x90:r=30"),
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000",
+            "-t",
+            &seconds.to_string(),
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-c:a",
+            "aac",
+            p.to_str().unwrap(),
         ]);
         p
     }
@@ -59,13 +74,33 @@ impl Workspace {
         let p = self.media(name);
         self.run_ffmpeg(&[
             "-y",
-            "-f", "lavfi", "-i", "color=c=red:s=160x90:r=30:duration=2",
-            "-f", "lavfi", "-i", "color=c=blue:s=160x90:r=30:duration=2",
-            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
-            "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v];[2:a]atrim=0:4[aud]",
-            "-map", "[v]", "-map", "[aud]",
-            "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast",
-            "-c:a", "aac", p.to_str().unwrap(),
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=160x90:r=30:duration=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=blue:s=160x90:r=30:duration=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000",
+            "-filter_complex",
+            "[0:v][1:v]concat=n=2:v=1:a=0[v];[2:a]atrim=0:4[aud]",
+            "-map",
+            "[v]",
+            "-map",
+            "[aud]",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-c:a",
+            "aac",
+            p.to_str().unwrap(),
         ]);
         p
     }
@@ -75,14 +110,37 @@ impl Workspace {
         let p = self.media(name);
         self.run_ffmpeg(&[
             "-y",
-            "-f", "lavfi", "-i", "color=c=green:s=160x90:r=30:duration=3.5",
-            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1",
-            "-f", "lavfi", "-i", "anullsrc=sample_rate=48000:duration=1.5",
-            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=1",
-            "-filter_complex", "[1:a][2:a][3:a]concat=n=3:v=0:a=1[aud]",
-            "-map", "0:v", "-map", "[aud]",
-            "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast",
-            "-c:a", "aac", p.to_str().unwrap(),
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=green:s=160x90:r=30:duration=3.5",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000:duration=1",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=sample_rate=48000:duration=1.5",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:sample_rate=48000:duration=1",
+            "-filter_complex",
+            "[1:a][2:a][3:a]concat=n=3:v=0:a=1[aud]",
+            "-map",
+            "0:v",
+            "-map",
+            "[aud]",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-c:a",
+            "aac",
+            p.to_str().unwrap(),
         ]);
         p
     }
@@ -126,11 +184,20 @@ fn project_with_clip(_ws: &Workspace, media: &Path) -> (Project, PathBuf) {
     let sid = source.id.clone();
     project.sources.push(source);
     let item = Item::new(
-        ItemKind::VideoClip { source_id: sid, source_in_ms: 0, source_out_ms: dur, speed: 1.0 },
+        ItemKind::VideoClip {
+            source_id: sid,
+            source_in_ms: 0,
+            source_out_ms: dur,
+            speed: 1.0,
+        },
         0,
         dur,
     );
-    project.track_of_kind_mut(TrackKind::Video).unwrap().items.push(item);
+    project
+        .track_of_kind_mut(TrackKind::Video)
+        .unwrap()
+        .items
+        .push(item);
     // Export at source size so pixel-sampling tests read 160x90 frames.
     project.export.width = sw;
     project.export.height = sh;
@@ -139,7 +206,9 @@ fn project_with_clip(_ws: &Workspace, media: &Path) -> (Project, PathBuf) {
 
 fn render(project: &Project, dir: &Path, out: &Path) {
     let engine = RenderEngine::new().unwrap();
-    let graph = engine.build_export_command(project, dir, out, HwChoice::None).unwrap();
+    let graph = engine
+        .build_export_command(project, dir, out, HwChoice::None)
+        .unwrap();
     let outp = Command::new(&graph.program)
         .args(&graph.args)
         .output()
@@ -190,26 +259,38 @@ fn trim_cut_concat_export_matches_expectations() {
     let media = ws.fixture_color("src.mp4", "gray", 4);
     let (mut project, dir) = project_with_clip(&ws, &media);
     // Keep only 1s..3s.
-    project.track_of_kind_mut(TrackKind::Video).unwrap().items[0].kind =
-        ItemKind::VideoClip {
-            source_id: project.sources[0].id.clone(),
-            source_in_ms: 1_000,
-            source_out_ms: 3_000,
-            speed: 1.0,
-        };
+    project.track_of_kind_mut(TrackKind::Video).unwrap().items[0].kind = ItemKind::VideoClip {
+        source_id: project.sources[0].id.clone(),
+        source_in_ms: 1_000,
+        source_out_ms: 3_000,
+        speed: 1.0,
+    };
     project.track_of_kind_mut(TrackKind::Video).unwrap().items[0].timeline_duration_ms = 2_000;
     let out = ws.media("out.mp4");
     render(&project, &dir, &out);
     let probe = probe_out(&out);
-    assert!((probe.duration_ms() - 2_000).abs() < 300, "duration {}", probe.duration_ms());
+    assert!(
+        (probe.duration_ms() - 2_000).abs() < 300,
+        "duration {}",
+        probe.duration_ms()
+    );
     let (w, h) = probe.resolution();
     assert_eq!((w, h), (160, 90));
-    assert_eq!(probe.video_stream().unwrap().codec_name.as_deref(), Some("h264"));
-    assert_eq!(probe.audio_stream().unwrap().codec_name.as_deref(), Some("aac"));
+    assert_eq!(
+        probe.video_stream().unwrap().codec_name.as_deref(),
+        Some("h264")
+    );
+    assert_eq!(
+        probe.audio_stream().unwrap().codec_name.as_deref(),
+        Some("aac")
+    );
     // Full decode without errors.
     let dec = Command::new(which_ffmpeg())
-        .args(["-v", "error", "-i"]).arg(&out).args(["-f", "null", "-"])
-        .output().unwrap();
+        .args(["-v", "error", "-i"])
+        .arg(&out)
+        .args(["-f", "null", "-"])
+        .output()
+        .unwrap();
     assert!(dec.status.success() && String::from_utf8_lossy(&dec.stderr).trim().is_empty());
 }
 
@@ -218,16 +299,15 @@ fn vignette_darkens_corners_on_flat_source() {
     let ws = Workspace::new("vig");
     let media = ws.fixture_color("flat.mp4", "gray", 2);
     let (mut project, dir) = project_with_clip(&ws, &media);
-    project.track_of_kind_mut(TrackKind::Video).unwrap().items[0].effects =
-        vec![EffectInstance {
-            id: mycut_core::new_id("fx"),
-            def_id: "vignette".into(),
-            params: BTreeMap::from([("strength".to_string(), ParamValue::Number(0.9))]),
-            window_start_ms: None,
-            window_end_ms: None,
-            keyframes: vec![],
-            easing: mycut_core::Easing::Linear,
-        }];
+    project.track_of_kind_mut(TrackKind::Video).unwrap().items[0].effects = vec![EffectInstance {
+        id: mycut_core::new_id("fx"),
+        def_id: "vignette".into(),
+        params: BTreeMap::from([("strength".to_string(), ParamValue::Number(0.9))]),
+        window_start_ms: None,
+        window_end_ms: None,
+        keyframes: vec![],
+        easing: mycut_core::Easing::Linear,
+    }];
     let out = ws.media("vig.mp4");
     render(&project, &dir, &out);
     let corner = frame_region_mean(&out, 1.0, (0.0, 0.0, 0.08, 0.12));
@@ -239,7 +319,10 @@ fn vignette_darkens_corners_on_flat_source() {
     // Control: unprocessed flat gray is uniform.
     let corner0 = frame_region_mean(&media, 1.0, (0.0, 0.0, 0.08, 0.12));
     let center0 = frame_region_mean(&media, 1.0, (0.45, 0.42, 0.55, 0.58));
-    assert!((corner0 - center0).abs() < 6.0, "fixture must be flat: {corner0} vs {center0}");
+    assert!(
+        (corner0 - center0).abs() < 6.0,
+        "fixture must be flat: {corner0} vs {center0}"
+    );
 }
 
 #[test]
@@ -266,16 +349,20 @@ fn captions_burn_pixels_into_bottom_region() {
             emphasize: false,
         }],
     };
-    project.track_of_kind_mut(TrackKind::Captions).unwrap().items.push(Item::new(
-        ItemKind::Captions {
-            style: mycut_core::CaptionStyle::Minimal,
-            scale: 1.0,
-            safe_area: "default".into(),
-            entries: vec![entry],
-        },
-        0,
-        2_000,
-    ));
+    project
+        .track_of_kind_mut(TrackKind::Captions)
+        .unwrap()
+        .items
+        .push(Item::new(
+            ItemKind::Captions {
+                style: mycut_core::CaptionStyle::Minimal,
+                scale: 1.0,
+                safe_area: "default".into(),
+                entries: vec![entry],
+            },
+            0,
+            2_000,
+        ));
     let out = ws.media("caps.mp4");
     render(&project, &dir, &out);
     let strip = Command::new(which_ffmpeg())
@@ -293,9 +380,15 @@ fn captions_burn_pixels_into_bottom_region() {
             maxv = maxv.max(data[y * w + x]);
         }
     }
-    assert!(maxv > 200, "captions must add bright pixels in bottom region, max={maxv}");
+    assert!(
+        maxv > 200,
+        "captions must add bright pixels in bottom region, max={maxv}"
+    );
     // The top area must stay black (no stray overlays).
-    let top_max = data[..(30 * w)].iter().copied().fold(0u8, std::cmp::Ord::max);
+    let top_max = data[..(30 * w)]
+        .iter()
+        .copied()
+        .fold(0u8, std::cmp::Ord::max);
     assert!(top_max < 40, "top region must remain clean, max={top_max}");
 }
 
@@ -325,21 +418,31 @@ fn zoom_punch_changes_frame_scale() {
     let ws = Workspace::new("zoom");
     let media = ws.media("ts.mp4");
     ws.run_ffmpeg(&[
-        "-y", "-f", "lavfi", "-i", "testsrc2=size=160x90:r=30",
-        "-t", "4", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=160x90:r=30",
+        "-t",
+        "4",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
         media.to_str().unwrap(),
     ]);
     let (mut project, dir) = project_with_clip(&ws, &media);
-    project.track_of_kind_mut(TrackKind::Video).unwrap().items[0].effects =
-        vec![EffectInstance {
-            id: mycut_core::new_id("fx"),
-            def_id: "zoom_punch".into(),
-            params: BTreeMap::from([("strength".to_string(), ParamValue::Number(1.6))]),
-            window_start_ms: Some(1_000),
-            window_end_ms: Some(2_000),
-            keyframes: vec![],
-            easing: mycut_core::Easing::EaseOut,
-        }];
+    project.track_of_kind_mut(TrackKind::Video).unwrap().items[0].effects = vec![EffectInstance {
+        id: mycut_core::new_id("fx"),
+        def_id: "zoom_punch".into(),
+        params: BTreeMap::from([("strength".to_string(), ParamValue::Number(1.6))]),
+        window_start_ms: Some(1_000),
+        window_end_ms: Some(2_000),
+        keyframes: vec![],
+        easing: mycut_core::Easing::EaseOut,
+    }];
     let out = ws.media("zoom.mp4");
     render(&project, &dir, &out);
     // Compare frame at t=0.5 (no effect) vs t=1.5 (peak zoom) center content.
@@ -363,7 +466,15 @@ fn silence_removal_shortens_video_and_audio_together() {
     // Detect the silence locally (the planner sees these ranges).
     let cancel = AtomicBool::new(false);
     let params = mycut_analysis::adaptive_params(3_500, false);
-    let a = mycut_analysis::analyze(&media, &ws.dir.join("cache"), 100_000_000, &params, &cancel, None).unwrap();
+    let a = mycut_analysis::analyze(
+        &media,
+        &ws.dir.join("cache"),
+        100_000_000,
+        &params,
+        &cancel,
+        None,
+    )
+    .unwrap();
     let gap = a
         .silences
         .iter()
@@ -401,7 +512,11 @@ fn silence_removal_shortens_video_and_audio_together() {
         first.1 - first.0,
         keeps[1].1 - keeps[1].0,
     );
-    project.track_of_kind_mut(TrackKind::Video).unwrap().items.push(second);
+    project
+        .track_of_kind_mut(TrackKind::Video)
+        .unwrap()
+        .items
+        .push(second);
     let out = ws.media("nosilence.mp4");
     render(&project, &dir, &out);
     let probe = probe_out(&out);
@@ -417,20 +532,46 @@ fn normalize_lifts_quiet_audio() {
     let ws = Workspace::new("loud");
     let media = ws.media("quiet.mp4");
     ws.run_ffmpeg(&[
-        "-y", "-f", "lavfi", "-i", "color=c=gray:s=160x90:r=30",
-        "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000",
-        "-t", "2", "-af", "volume=-24dB",
-        "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast",
-        "-c:a", "aac", media.to_str().unwrap(),
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=gray:s=160x90:r=30",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:sample_rate=48000",
+        "-t",
+        "2",
+        "-af",
+        "volume=-24dB",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-c:a",
+        "aac",
+        media.to_str().unwrap(),
     ]);
     let (mut project, dir) = project_with_clip(&ws, &media);
-    project.audio = AudioMaster { normalize: true, ..Default::default() };
+    project.audio = AudioMaster {
+        normalize: true,
+        ..Default::default()
+    };
     let out = ws.media("loud.mp4");
     render(&project, &dir, &out);
     let measure = Command::new(which_ffmpeg())
         .args(["-hide_banner", "-i"])
         .arg(&out)
-        .args(["-af", "loudnorm=I=-16:TP=-1.5:print_format=json", "-f", "null", "-"])
+        .args([
+            "-af",
+            "loudnorm=I=-16:TP=-1.5:print_format=json",
+            "-f",
+            "null",
+            "-",
+        ])
         .stderr(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .output()
@@ -453,7 +594,8 @@ fn scene_detection_finds_hard_cuts() {
     let cancel = AtomicBool::new(false);
     let params = mycut_analysis::adaptive_params(4_000, false);
     let cache_dir = ws.dir.join("cache");
-    let a = mycut_analysis::analyze(&media, &cache_dir, 100_000_000, &params, &cancel, None).unwrap();
+    let a =
+        mycut_analysis::analyze(&media, &cache_dir, 100_000_000, &params, &cancel, None).unwrap();
     assert!(
         !a.scenes.is_empty(),
         "must detect the red->blue cut; scenes={:?}",
@@ -469,9 +611,19 @@ fn reframe_9x16_produces_vertical_output() {
     let ws = Workspace::new("reframe");
     let media = ws.media("moving.mp4");
     ws.run_ffmpeg(&[
-        "-y", "-f", "lavfi", "-i",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
         "testsrc2=size=320x180:r=30,drawbox=x='80+20*t':y=60:w=60:h=60:color=white:t=fill",
-        "-t", "4", "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast",
+        "-t",
+        "4",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
         media.to_str().unwrap(),
     ]);
     let (mut project, dir) = project_with_clip(&ws, &media);
@@ -495,7 +647,10 @@ fn no_shell_in_any_render_args_with_adversarial_text() {
     let media = ws.fixture_color("flat.mp4", "gray", 2);
     let (mut project, dir) = project_with_clip(&ws, &media);
     project.color.saturation = 1.3;
-    project.reframe = Some(ReframeSettings { ratio: AspectRatio::R1x1, mode: ReframeMode::Center });
+    project.reframe = Some(ReframeSettings {
+        ratio: AspectRatio::R1x1,
+        mode: ReframeMode::Center,
+    });
     project.track_of_kind_mut(TrackKind::Video).unwrap().items[0].effects = vec![
         EffectInstance {
             id: "fx1".into(),
@@ -516,17 +671,21 @@ fn no_shell_in_any_render_args_with_adversarial_text() {
             easing: mycut_core::Easing::Linear,
         },
     ];
-    project.track_of_kind_mut(TrackKind::Text).unwrap().items.push(Item::new(
-        ItemKind::Text {
-            kind: mycut_core::TextKind::Title,
-            text: "ev'; rm -rf ~; echo $(id) `id` ; :".into(),
-            position: mycut_core::Position::Center,
-            scale: 1.0,
-            opacity: 1.0,
-        },
-        0,
-        1_000,
-    ));
+    project
+        .track_of_kind_mut(TrackKind::Text)
+        .unwrap()
+        .items
+        .push(Item::new(
+            ItemKind::Text {
+                kind: mycut_core::TextKind::Title,
+                text: "ev'; rm -rf ~; echo $(id) `id` ; :".into(),
+                position: mycut_core::Position::Center,
+                scale: 1.0,
+                opacity: 1.0,
+            },
+            0,
+            1_000,
+        ));
     let engine = RenderEngine::new().unwrap();
     let graph = engine
         .build_export_command(&project, &dir, &ws.media("x.mp4"), HwChoice::None)
@@ -537,8 +696,14 @@ fn no_shell_in_any_render_args_with_adversarial_text() {
         assert!(!arg.contains('\n'), "newline in argv element: {arg:?}");
     }
     // argv is never a shell line: no "-c"/"sh" pairs anywhere.
-    assert!(!graph.args.windows(2).any(|w| (w[0] == "sh" && w[1] == "-c") || (w[0] == "-c" && w[1].contains("rm"))));
+    assert!(!graph
+        .args
+        .windows(2)
+        .any(|w| (w[0] == "sh" && w[1] == "-c") || (w[0] == "-c" && w[1].contains("rm"))));
     // Adversarial text is safely escaped inside drawtext.
     let text_arg = graph.args.iter().find(|a| a.contains("drawtext")).unwrap();
-    assert!(text_arg.contains("\\'") || text_arg.contains("rm -rf"), "text present (escaped): {text_arg}");
+    assert!(
+        text_arg.contains("\\'") || text_arg.contains("rm -rf"),
+        "text present (escaped): {text_arg}"
+    );
 }

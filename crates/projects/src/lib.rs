@@ -52,7 +52,11 @@ use thiserror::Error;
 #[must_use]
 pub fn to_project_relative(media_path: &Path, project_dir: &Path) -> String {
     match media_path.canonicalize() {
-        Ok(canon) => match canon.strip_prefix(project_dir.canonicalize().unwrap_or_else(|_| project_dir.to_path_buf())) {
+        Ok(canon) => match canon.strip_prefix(
+            project_dir
+                .canonicalize()
+                .unwrap_or_else(|_| project_dir.to_path_buf()),
+        ) {
             Ok(rel) => rel.to_string_lossy().into_owned(),
             Err(_) => canon.to_string_lossy().into_owned(),
         },
@@ -86,8 +90,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), ProjectIoError> {
         f.sync_all()?;
     }
     // Persist over the target atomically (same filesystem).
-    tmp.persist(path)
-        .map_err(|e| ProjectIoError::Io(e.error))?;
+    tmp.persist(path).map_err(|e| ProjectIoError::Io(e.error))?;
     // Best-effort directory fsync so the rename is durable.
     if let Ok(d) = fs::File::open(dir) {
         let _ = d.sync_all();
@@ -165,23 +168,13 @@ pub fn load_with_recovery(path: &Path) -> Option<(ProjectDocument, PathBuf)> {
 
 /// Forward migration chain. Currently v1.0 only; future versions append
 /// `fn v1_0_to_v1_1(...) -> ...` steps here.
-fn migrate(mut doc: ProjectDocument) -> Result<ProjectDocument, ProjectIoError> {
+fn migrate(doc: ProjectDocument) -> Result<ProjectDocument, ProjectIoError> {
     match doc.schema_version.as_str() {
         SCHEMA_VERSION => Ok(doc),
-        other => {
-            // Try minor-version prefix match for forward-compatible minors.
-            if other.starts_with("1.") && other > SCHEMA_VERSION {
-                Err(ProjectIoError::NewerVersion {
-                    found: other.to_string(),
-                    supported: SCHEMA_VERSION.to_string(),
-                })
-            } else {
-                Err(ProjectIoError::NewerVersion {
-                    found: other.to_string(),
-                    supported: SCHEMA_VERSION.to_string(),
-                })
-            }
-        }
+        other => Err(ProjectIoError::NewerVersion {
+            found: other.to_string(),
+            supported: SCHEMA_VERSION.to_string(),
+        }),
     }
 }
 
@@ -266,7 +259,10 @@ mod tests {
         let mut p2 = p.clone();
         h.apply(
             &mut p2,
-            Command::AddClip { track_kind: TrackKind::Text, item },
+            Command::AddClip {
+                track_kind: TrackKind::Text,
+                item,
+            },
         )
         .unwrap();
         save_project(&p2, &h, &path).unwrap();

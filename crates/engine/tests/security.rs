@@ -7,7 +7,11 @@ use std::path::Path;
 fn repo_root() -> PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     // crates/engine -> repo root
-    manifest.parent().and_then(|p| p.parent()).expect("root").to_path_buf()
+    manifest
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("root")
+        .to_path_buf()
 }
 
 use std::path::PathBuf;
@@ -17,7 +21,9 @@ fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
         for e in rd.flatten() {
             let p = e.path();
             if p.is_dir() {
-                if p.file_name().is_some_and(|n| n == "target" || n == "node_modules" || n == "dist") {
+                if p.file_name()
+                    .is_some_and(|n| n == "target" || n == "node_modules" || n == "dist")
+                {
                     continue;
                 }
                 collect_rs(&p, out);
@@ -35,7 +41,11 @@ fn no_shell_spawn_sites_in_source() {
     let root = repo_root();
     let mut files = Vec::new();
     collect_rs(&root, &mut files);
-    assert!(files.len() > 20, "expected to audit the whole workspace, found {}", files.len());
+    assert!(
+        files.len() > 20,
+        "expected to audit the whole workspace, found {}",
+        files.len()
+    );
     for f in &files {
         let src = std::fs::read_to_string(f).unwrap_or_default();
         for (i, line) in src.lines().enumerate() {
@@ -69,7 +79,7 @@ fn no_shell_helper_crates_in_cargo_tomls() {
     collect_tomls(&root, &mut manifests);
     for m in manifests {
         let src = std::fs::read_to_string(&m).unwrap_or_default();
-        for banned in ["duct", "shell-words", "shlex", "subprocess " ] {
+        for banned in ["duct", "shell-words", "shlex", "subprocess "] {
             assert!(
                 !src.contains(banned),
                 "{} must not depend on shell-helper crate {banned}",
@@ -84,7 +94,9 @@ fn collect_tomls(dir: &Path, out: &mut Vec<PathBuf>) {
         for e in rd.flatten() {
             let p = e.path();
             if p.is_dir() {
-                if p.file_name().is_some_and(|n| n == "target" || n == "node_modules") {
+                if p.file_name()
+                    .is_some_and(|n| n == "target" || n == "node_modules")
+                {
                     continue;
                 }
                 collect_tomls(&p, out);
@@ -104,5 +116,8 @@ fn schema_document_is_strict() {
     // Every "operation" oneOf branch rejects unknown members.
     let text = serde_json::to_string(&doc).unwrap();
     let count_additional_false = text.matches("\"additionalProperties\":false").count();
-    assert!(count_additional_false >= 3, "schema must be strict ({count_additional_false})");
+    assert!(
+        count_additional_false >= 3,
+        "schema must be strict ({count_additional_false})"
+    );
 }

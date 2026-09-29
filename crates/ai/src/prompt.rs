@@ -61,7 +61,7 @@ pub struct TimelineSummary {
 /// Analysis digest: only what planning needs (compact).
 #[derive(Debug, Clone, Default)]
 pub struct AnalysisDigest {
-    pub scenes: Vec<(f64, f64, f64)>,      // start, end, score
+    pub scenes: Vec<(f64, f64, f64)>, // start, end, score
     pub silences: Vec<(f64, f64)>,
     pub speech_regions: Vec<(f64, f64)>,
     pub loudness_lufs: Option<f64>,
@@ -84,9 +84,25 @@ pub fn catalog_text() -> String {
         })
         .collect();
     let styles = [
-        "minimal", "gaming", "tiktok", "youtube", "cinematic", "bold", "karaoke", "word_highlight", "streamer",
+        "minimal",
+        "gaming",
+        "tiktok",
+        "youtube",
+        "cinematic",
+        "bold",
+        "karaoke",
+        "word_highlight",
+        "streamer",
     ];
-    let presets = ["youtube", "youtube_shorts", "instagram_reels", "tiktok", "discord", "twitter_x", "custom"];
+    let presets = [
+        "youtube",
+        "youtube_shorts",
+        "instagram_reels",
+        "tiktok",
+        "discord",
+        "twitter_x",
+        "custom",
+    ];
     format!(
         "AVAILABLE EFFECTS (add_effect):\n{}\n\nCAPTION STYLES: {}\n\nEXPORT PRESETS: {}\n\nTRANSITIONS: cut, fade, crossfade, dip_to_black, dip_to_white, slide, push, zoom, wipe (blur is NOT available)\n\nASPECTS: 16:9, 9:16, 1:1, 4:5 with reframe center|subject_follow|smart\n\nCOLOR PARAMS: exposure[-3,3] contrast[0.1,3] saturation[0,3] vibrance[-1,1] temperature[-1,1] gamma[0.1,3]\n\nAUDIO: volume[0,4], normalize, denoise, remove_silence, duck_music_under_speech, fade_in/fade_out[0,10]\n\nSPEED range [0.25, 4]",
         effects.join("\n"),
@@ -97,7 +113,11 @@ pub fn catalog_text() -> String {
 
 /// Build the chat messages for a planning request.
 #[must_use]
-pub fn build_messages(summary: &ContextSummary, frames_enabled: bool, has_vision: bool) -> Vec<crate::provider::ChatMessage> {
+pub fn build_messages(
+    summary: &ContextSummary,
+    frames_enabled: bool,
+    has_vision: bool,
+) -> Vec<crate::provider::ChatMessage> {
     use crate::provider::ChatMessage;
     let mut parts: Vec<String> = Vec::new();
 
@@ -116,17 +136,40 @@ pub fn build_messages(summary: &ContextSummary, frames_enabled: bool, has_vision
     ));
     // Analysis.
     if let Some(a) = &summary.analysis {
-        let scenes: Vec<String> = a.scenes.iter().take(40).map(|(s, e, sc)| format!("{s:.1}-{e:.1}@{sc:.2}")).collect();
-        let sil: Vec<String> = a.silences.iter().take(30).map(|(s, e)| format!("{s:.1}-{e:.1}")).collect();
-        let speech: Vec<String> = a.speech_regions.iter().take(30).map(|(s, e)| format!("{s:.1}-{e:.1}")).collect();
-        let hl: Vec<String> = a.highlights.iter().take(6).map(|(s, e, sc)| format!("{s:.1}-{e:.1}@{sc:.1}")).collect();
+        let scenes: Vec<String> = a
+            .scenes
+            .iter()
+            .take(40)
+            .map(|(s, e, sc)| format!("{s:.1}-{e:.1}@{sc:.2}"))
+            .collect();
+        let sil: Vec<String> = a
+            .silences
+            .iter()
+            .take(30)
+            .map(|(s, e)| format!("{s:.1}-{e:.1}"))
+            .collect();
+        let speech: Vec<String> = a
+            .speech_regions
+            .iter()
+            .take(30)
+            .map(|(s, e)| format!("{s:.1}-{e:.1}"))
+            .collect();
+        let hl: Vec<String> = a
+            .highlights
+            .iter()
+            .take(6)
+            .map(|(s, e, sc)| format!("{s:.1}-{e:.1}@{sc:.1}"))
+            .collect();
         parts.push(format!("SCENES (start-end@score): {}", scenes.join(", ")));
         parts.push(format!("SILENCE RANGES: {}", sil.join(", ")));
         parts.push(format!("SPEECH REGIONS: {}", speech.join(", ")));
         if let Some(l) = a.loudness_lufs {
             parts.push(format!("LOUDNESS: {l:.1} LUFS integrated"));
         }
-        parts.push(format!("HIGHLIGHT CANDIDATES (start-end@score): {}", hl.join(", ")));
+        parts.push(format!(
+            "HIGHLIGHT CANDIDATES (start-end@score): {}",
+            hl.join(", ")
+        ));
         parts.push(format!("ACTIVITY BRIEF: {}", a.activity_brief));
     }
     // Transcript (segment level).
@@ -147,7 +190,9 @@ pub fn build_messages(summary: &ContextSummary, frames_enabled: bool, has_vision
     } else if has_vision {
         parts.push("FRAMES: not attached (user disabled frame sharing). Plan from transcript and metadata only.".into());
     } else {
-        parts.push("FRAMES: this model cannot view frames; plan from transcript and metadata only.".into());
+        parts.push(
+            "FRAMES: this model cannot view frames; plan from transcript and metadata only.".into(),
+        );
     }
 
     // Conversation tail (compact).
@@ -158,11 +203,19 @@ pub fn build_messages(summary: &ContextSummary, frames_enabled: bool, has_vision
         &summary.conversation
     };
     for (role, content) in tail {
-        messages.push(ChatMessage { role: role.clone(), content: content.clone(), image_url: None });
+        messages.push(ChatMessage {
+            role: role.clone(),
+            content: content.clone(),
+            image_url: None,
+        });
     }
     messages.push(ChatMessage {
         role: "user".into(),
-        content: format!("CONTEXT:\n{}\n\nREQUEST: {}", parts.join("\n"), summary.request),
+        content: format!(
+            "CONTEXT:\n{}\n\nREQUEST: {}",
+            parts.join("\n"),
+            summary.request
+        ),
         image_url: None,
     });
     messages
@@ -216,7 +269,9 @@ mod tests {
         let msgs = build_messages(&s, false, false);
         assert_eq!(msgs.len(), 1);
         assert!(msgs[0].content.contains("duration=95.00s"));
-        assert!(msgs[0].content.contains("Make this a 30 second gaming Short"));
+        assert!(msgs[0]
+            .content
+            .contains("Make this a 30 second gaming Short"));
         assert!(msgs[0].content.contains("cannot view frames"));
     }
 }

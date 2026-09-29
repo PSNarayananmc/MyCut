@@ -139,17 +139,30 @@ pub fn run_tool(program: &str, args: &[String], cancel: CancelFlag) -> Result<St
 
 /// Synchronous small-output run used for probing encoder availability.
 pub(crate) fn run_tool_blocking(program: &str, args: &[String]) -> Result<String, EngineError> {
-    let out = Command::new(program).args(args).output().map_err(EngineError::Spawn)?;
+    let out = Command::new(program)
+        .args(args)
+        .output()
+        .map_err(EngineError::Spawn)?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     } else {
-        Err(EngineError::Tool(String::from_utf8_lossy(&out.stderr).into_owned()))
+        Err(EngineError::Tool(
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        ))
     }
 }
 
 #[must_use]
 pub fn stderr_tail(s: &str) -> String {
-    let tail: String = s.lines().rev().take(12).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+    let tail: String = s
+        .lines()
+        .rev()
+        .take(12)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n");
     tail
 }
 
@@ -170,8 +183,20 @@ fn tiny_test_encode(encoder: &str) -> bool {
     };
     // VAAPI additionally needs a render device; absence just makes it false.
     let mut args: Vec<String> = [
-        "-hide_banner", "-v", "error", "-f", "lavfi", "-i", "color=c=black:s=64x64:d=0.2",
-        "-frames:v", "3", "-c:v", encoder, "-f", "null", "-",
+        "-hide_banner",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=64x64:d=0.2",
+        "-frames:v",
+        "3",
+        "-c:v",
+        encoder,
+        "-f",
+        "null",
+        "-",
     ]
     .iter()
     .map(|s| (*s).to_string())
@@ -179,9 +204,24 @@ fn tiny_test_encode(encoder: &str) -> bool {
     if encoder == "h264_vaapi" {
         // Try common render node; vaapi requires format conversion too.
         args = [
-            "-hide_banner", "-v", "error", "-vaapi_device", "/dev/dri/renderD128",
-            "-f", "lavfi", "-i", "color=c=black:s=64x64:d=0.2", "-frames:v", "3",
-            "-vf", "format=nv12,hwupload", "-c:v", encoder, "-f", "null", "-",
+            "-hide_banner",
+            "-v",
+            "error",
+            "-vaapi_device",
+            "/dev/dri/renderD128",
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=black:s=64x64:d=0.2",
+            "-frames:v",
+            "3",
+            "-vf",
+            "format=nv12,hwupload",
+            "-c:v",
+            encoder,
+            "-f",
+            "null",
+            "-",
         ]
         .iter()
         .map(|s| (*s).to_string())
@@ -196,7 +236,9 @@ pub fn encoders_listing(ffmpeg: &str) -> Vec<String> {
     run_tool_blocking(ffmpeg, &["-hide_banner".into(), "-encoders".into()])
         .map(|out| {
             out.lines()
-                .filter(|l| l.trim_start().starts_with('V') || l.contains("H264") || l.contains("h264"))
+                .filter(|l| {
+                    l.trim_start().starts_with('V') || l.contains("H264") || l.contains("h264")
+                })
                 .filter_map(|l| l.split_whitespace().nth(1).map(str::to_string))
                 .collect()
         })

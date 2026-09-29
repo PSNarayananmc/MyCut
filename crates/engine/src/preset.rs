@@ -33,8 +33,24 @@ pub fn builtin_presets() -> Vec<ExportPreset> {
     }
     vec![
         preset("youtube", "YouTube 1080p", 1920, 1080, 30.0, 18, 192),
-        preset("youtube_shorts", "YouTube Shorts", 1080, 1920, 30.0, 19, 192),
-        preset("instagram_reels", "Instagram Reels", 1080, 1920, 30.0, 20, 128),
+        preset(
+            "youtube_shorts",
+            "YouTube Shorts",
+            1080,
+            1920,
+            30.0,
+            19,
+            192,
+        ),
+        preset(
+            "instagram_reels",
+            "Instagram Reels",
+            1080,
+            1920,
+            30.0,
+            20,
+            128,
+        ),
         preset("tiktok", "TikTok", 1080, 1920, 30.0, 20, 128),
         preset("discord", "Discord (small file)", 1280, 720, 30.0, 26, 128),
         preset("twitter_x", "Twitter / X", 1280, 720, 30.0, 23, 128),
@@ -63,7 +79,10 @@ pub fn dimensions_for(ratio: AspectRatio, src_w: u32, src_h: u32) -> (u32, u32) 
     // Cap long side at 1920 to keep low-end renders tractable.
     let (w, h) = if w.max(h) > 1920 {
         let k = 1920.0 / f64::from(w.max(h));
-        (((w as f64) * k).round() as u32, ((h as f64) * k).round() as u32)
+        (
+            ((w as f64) * k).round() as u32,
+            ((h as f64) * k).round() as u32,
+        )
     } else {
         (w, h)
     };
@@ -88,7 +107,15 @@ mod tests {
     fn preset_table_complete() {
         let presets = builtin_presets();
         let ids: Vec<_> = presets.iter().map(|p| p.id.as_str()).collect();
-        for id in ["youtube", "youtube_shorts", "instagram_reels", "tiktok", "discord", "twitter_x", "custom"] {
+        for id in [
+            "youtube",
+            "youtube_shorts",
+            "instagram_reels",
+            "tiktok",
+            "discord",
+            "twitter_x",
+            "custom",
+        ] {
             assert!(ids.contains(&id), "missing preset {id}");
         }
         // Shorts are vertical.

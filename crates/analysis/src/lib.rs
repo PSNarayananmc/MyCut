@@ -6,7 +6,7 @@ pub mod cache;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -85,7 +85,11 @@ pub struct AnalysisParams {
 
 impl Default for AnalysisParams {
     fn default() -> Self {
-        Self { scene_fps: 5, silence_threshold_db: -35, motion_fps: 4 }
+        Self {
+            scene_fps: 5,
+            silence_threshold_db: -35,
+            motion_fps: 4,
+        }
     }
 }
 
@@ -102,7 +106,11 @@ pub fn adaptive_params(duration_ms: i64, sparse: bool) -> AnalysisParams {
     } else {
         (3, 3)
     };
-    AnalysisParams { scene_fps, motion_fps, silence_threshold_db: -35 }
+    AnalysisParams {
+        scene_fps,
+        motion_fps,
+        silence_threshold_db: -35,
+    }
 }
 
 /// Progress callback: (stage, percent 0..100).
@@ -130,7 +138,9 @@ pub fn analyze(
     let key = Cache::key(&hash, &key_params);
 
     if let Some(hit) = cache.get::<Analysis>(&key) {
-        progress.map(|p| p("cache", 100));
+        if let Some(p) = progress {
+        p("cache", 100);
+    }
         return Ok(hit);
     }
 
@@ -159,34 +169,51 @@ fn check(cancel: &std::sync::atomic::AtomicBool) -> Result<(), AnalysisError> {
     }
 }
 
-fn run_ffmpeg(args: &[&str], cancel: &std::sync::atomic::AtomicBool) -> Result<(String, String), AnalysisError> {
+fn run_ffmpeg(
+    args: &[&str],
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(String, String), AnalysisError> {
     let ffmpeg = which_ffmpeg().ok_or_else(|| AnalysisError::ToolNotFound("ffmpeg".into()))?;
     let mut cmd = std::process::Command::new(ffmpeg);
     cmd.args(["-hide_banner", "-nostdin"]);
     cmd.args(args);
     cmd.stdin(std::process::Stdio::null());
-    let mut child = cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().map_err(AnalysisError::Io)?;
+    let mut child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(AnalysisError::Io)?;
     // Cancellable wait: poll.
     loop {
         check(cancel)?;
         match child.try_wait().map_err(AnalysisError::Io)? {
             Some(status) => {
-                let out = child.stdout.take().map(|mut s| {
-                    use std::io::Read;
-                    let mut b = Vec::new();
-                    let _ = s.read_to_end(&mut b);
-                    String::from_utf8_lossy(&b).into_owned()
-                }).unwrap_or_default();
-                let err = child.stderr.take().map(|mut s| {
-                    use std::io::Read;
-                    let mut b = Vec::new();
-                    let _ = s.read_to_end(&mut b);
-                    String::from_utf8_lossy(&b).into_owned()
-                }).unwrap_or_default();
+                let out = child
+                    .stdout
+                    .take()
+                    .map(|mut s| {
+                        use std::io::Read;
+                        let mut b = Vec::new();
+                        let _ = s.read_to_end(&mut b);
+                        String::from_utf8_lossy(&b).into_owned()
+                    })
+                    .unwrap_or_default();
+                let err = child
+                    .stderr
+                    .take()
+                    .map(|mut s| {
+                        use std::io::Read;
+                        let mut b = Vec::new();
+                        let _ = s.read_to_end(&mut b);
+                        String::from_utf8_lossy(&b).into_owned()
+                    })
+                    .unwrap_or_default();
                 if status.success() {
                     return Ok((out, err));
                 }
-                return Err(AnalysisError::Tool(err.lines().rev().take(8).collect::<Vec<_>>().join("\n")));
+                return Err(AnalysisError::Tool(
+                    err.lines().rev().take(8).collect::<Vec<_>>().join("\n"),
+                ));
             }
             None => std::thread::sleep(std::time::Duration::from_millis(40)),
         }
@@ -205,7 +232,9 @@ fn which_ffmpeg() -> Option<PathBuf> {
 
 fn which_in_path(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).map(|d| d.join(name)).find(|c| c.is_file())
+    std::env::split_paths(&path)
+        .map(|d| d.join(name))
+        .find(|c| c.is_file())
 }
 
 fn analyze_uncached(
@@ -218,41 +247,74 @@ fn analyze_uncached(
     let mut result = Analysis::default();
 
     // 1. Duration via ffprobe.
-    progress.map(|p| p("probe", 5));
+    if let Some(p) = progress {
+        p("probe", 5);
+    }
     let probe_json = run_ffprobe(&media_s, cancel)?;
     result.duration_ms = probe_duration_ms(&probe_json);
 
     // 2. Scenes.
-    progress.map(|p| p("scenes", 25));
+    if let Some(p) = progress {
+        p("scenes", 25);
+    }
     check(cancel)?;
     let fps = params.scene_fps;
-    let (_, stderr) = run_ffmpeg(&[
-        "-i", &media_s,
-        "-vf", &format!("fps={fps},scale=160:-2,select='gt(scene,0.15)',metadata=print"),
-        "-an", "-f", "null", "-",
-    ], cancel)?;
+    let (_, stderr) = run_ffmpeg(
+        &[
+            "-i",
+            &media_s,
+            "-vf",
+            &format!("fps={fps},scale=160:-2,select='gt(scene,0.15)',metadata=print"),
+            "-an",
+            "-f",
+            "null",
+            "-",
+        ],
+        cancel,
+    )?;
     result.scenes = parse_scene_scores(&stderr, "", result.duration_ms);
 
     // 3. Audio: silence + loudness.
-    progress.map(|p| p("audio", 55));
+    if let Some(p) = progress {
+        p("audio", 55);
+    }
     check(cancel)?;
-    let (_, err2) = run_ffmpeg(&[
-        "-i", &media_s,
-        "-af", &format!("silencedetect=noise={}dB:d=0.4", params.silence_threshold_db),
-        "-f", "null", "-",
-    ], cancel)?;
+    let (_, err2) = run_ffmpeg(
+        &[
+            "-i",
+            &media_s,
+            "-af",
+            &format!(
+                "silencedetect=noise={}dB:d=0.4",
+                params.silence_threshold_db
+            ),
+            "-f",
+            "null",
+            "-",
+        ],
+        cancel,
+    )?;
     result.silences = parse_silence(&err2);
     result.speech_regions = invert_silences(&result.silences, result.duration_ms);
 
-    let (_, err3) = run_ffmpeg(&[
-        "-i", &media_s,
-        "-af", "loudnorm=I=-16:TP=-1.5:print_format=json",
-        "-f", "null", "-",
-    ], cancel)?;
+    let (_, err3) = run_ffmpeg(
+        &[
+            "-i",
+            &media_s,
+            "-af",
+            "loudnorm=I=-16:TP=-1.5:print_format=json",
+            "-f",
+            "null",
+            "-",
+        ],
+        cancel,
+    )?;
     result.loudness = parse_loudnorm(&err3);
 
     // 4. Motion.
-    progress.map(|p| p("motion", 80));
+    if let Some(p) = progress {
+        p("motion", 80);
+    }
     check(cancel)?;
     let mfps = params.motion_fps;
     let (_, err4) = run_ffmpeg(&[
@@ -263,24 +325,35 @@ fn analyze_uncached(
     result.motion = parse_motion(&err4, result.duration_ms, mfps);
 
     // 5. Highlights (pure, deterministic).
-    progress.map(|p| p("highlights", 95));
+    if let Some(p) = progress {
+        p("highlights", 95);
+    }
     result.highlights = highlight_windows(&result, 3, 2.0, 12.0);
 
     // 6. Auto color.
     check(cancel)?;
     result.auto_color = auto_color(media, cancel).unwrap_or_default();
-    progress.map(|p| p("done", 100));
+    if let Some(p) = progress {
+        p("done", 100);
+    }
     Ok(result)
 }
 
-fn stdout_from(_stderr: &str) -> String {
-    String::new()
-}
-
-fn run_ffprobe(media: &str, cancel: &std::sync::atomic::AtomicBool) -> Result<String, AnalysisError> {
-    let ffprobe = which_in_path("ffprobe").ok_or_else(|| AnalysisError::ToolNotFound("ffprobe".into()))?;
+fn run_ffprobe(
+    media: &str,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<String, AnalysisError> {
+    let ffprobe =
+        which_in_path("ffprobe").ok_or_else(|| AnalysisError::ToolNotFound("ffprobe".into()))?;
     let mut cmd = std::process::Command::new(ffprobe);
-    cmd.args(["-v", "error", "-print_format", "json", "-show_format", media]);
+    cmd.args([
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_format",
+        media,
+    ]);
     let out = cmd.output().map_err(AnalysisError::Io)?;
     check(cancel)?;
     if out.status.success() {
@@ -293,7 +366,11 @@ fn run_ffprobe(media: &str, cancel: &std::sync::atomic::AtomicBool) -> Result<St
 fn probe_duration_ms(json: &str) -> i64 {
     serde_json::from_str::<serde_json::Value>(json)
         .ok()
-        .and_then(|v| v["format"]["duration"].as_str().and_then(|d| d.parse::<f64>().ok()))
+        .and_then(|v| {
+            v["format"]["duration"]
+                .as_str()
+                .and_then(|d| d.parse::<f64>().ok())
+        })
         .map(|s| (s * 1000.0).round() as i64)
         .unwrap_or(0)
 }
@@ -327,7 +404,11 @@ pub fn parse_scene_scores(stderr: &str, _extra: &str, _duration_ms: i64) -> Vec<
                 .parse::<f64>()
             {
                 if let Some(t) = pending_time.take() {
-                    scenes.push(Scene { start_s: last_cut_end, end_s: t, score: score.max(0.15) });
+                    scenes.push(Scene {
+                        start_s: last_cut_end,
+                        end_s: t,
+                        score: score.max(0.15),
+                    });
                     last_cut_end = t;
                 }
             }
@@ -348,14 +429,26 @@ pub fn parse_silence(stderr: &str) -> Vec<SilenceRange> {
             } else if let Some(pos) = v.find("silence_end:") {
                 if let Some(s) = start.take() {
                     let rest = &v[pos + "silence_end:".len()..];
-                    let end = rest.split('|').next().unwrap_or("").trim().parse::<f64>().unwrap_or(0.0);
-                    out.push(SilenceRange { start_s: s, end_s: end });
+                    let end = rest
+                        .split('|')
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .parse::<f64>()
+                        .unwrap_or(0.0);
+                    out.push(SilenceRange {
+                        start_s: s,
+                        end_s: end,
+                    });
                 }
             }
         }
     }
     if let Some(s) = start {
-        out.push(SilenceRange { start_s: s, end_s: f64::INFINITY });
+        out.push(SilenceRange {
+            start_s: s,
+            end_s: f64::INFINITY,
+        });
     }
     out
 }
@@ -369,12 +462,18 @@ pub fn invert_silences(silences: &[SilenceRange], duration_ms: i64) -> Vec<Silen
     for s in silences {
         let s_start = s.start_s.min(dur_s);
         if s_start - cursor >= 0.5 {
-            speech.push(SilenceRange { start_s: cursor, end_s: s_start });
+            speech.push(SilenceRange {
+                start_s: cursor,
+                end_s: s_start,
+            });
         }
         cursor = cursor.max(s.end_s.min(dur_s));
     }
     if dur_s - cursor >= 0.5 {
-        speech.push(SilenceRange { start_s: cursor, end_s: dur_s });
+        speech.push(SilenceRange {
+            start_s: cursor,
+            end_s: dur_s,
+        });
     }
     speech
 }
@@ -407,11 +506,15 @@ pub fn parse_motion(stderr: &str, duration_ms: i64, fps: u32) -> MotionCurve {
     for line in stderr.lines() {
         if let Some(p) = line.find("pblack:") {
             let pts_t = line.find("pts_time:").and_then(|i| {
-                line[i + "pts_time:".len()..].split_whitespace().next().and_then(|v| v.parse::<f64>().ok())
+                line[i + "pts_time:".len()..]
+                    .split_whitespace()
+                    .next()
+                    .and_then(|v| v.parse::<f64>().ok())
             });
             let Some(t) = pts_t else { continue };
             let pb: f64 = line[p + "pblack:".len()..]
-                .split_whitespace().next()
+                .split_whitespace()
+                .next()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(100.0);
             let idx = (t as usize).min(secs - 1);
@@ -425,7 +528,13 @@ pub fn parse_motion(stderr: &str, duration_ms: i64, fps: u32) -> MotionCurve {
         per_second: sums
             .iter()
             .zip(counts.iter())
-            .map(|(s, c)| if *c > 0 { (s / (*c as f64)).clamp(0.0, 1.0) as f32 } else { 0.0 })
+            .map(|(s, c)| {
+                if *c > 0 {
+                    (s / (*c as f64)).clamp(0.0, 1.0) as f32
+                } else {
+                    0.0
+                }
+            })
             .collect(),
     }
 }
@@ -449,7 +558,10 @@ pub fn highlight_windows(
     for (i, m) in analysis.motion.per_second.iter().enumerate() {
         scores[i] += f64::from(*m) * 1.0;
         let t = i as f64;
-        let in_speech = analysis.speech_regions.iter().any(|r| t >= r.start_s && t <= r.end_s);
+        let in_speech = analysis
+            .speech_regions
+            .iter()
+            .any(|r| t >= r.start_s && t <= r.end_s);
         if in_speech {
             scores[i] += 0.3;
         }
@@ -478,13 +590,23 @@ pub fn highlight_windows(
         if end - start < min_len_s * 0.9 {
             continue;
         }
-        let overlaps = chosen.iter().any(|w| start < w.end_s + 1.0 && end > w.start_s - 1.0);
+        let overlaps = chosen
+            .iter()
+            .any(|w| start < w.end_s + 1.0 && end > w.start_s - 1.0);
         if overlaps || start > max_end {
             continue;
         }
-        chosen.push(HighlightWindow { start_s: start, end_s: end, score: sum });
+        chosen.push(HighlightWindow {
+            start_s: start,
+            end_s: end,
+            score: sum,
+        });
     }
-    chosen.sort_by(|a, b| a.start_s.partial_cmp(&b.start_s).unwrap_or(std::cmp::Ordering::Equal));
+    chosen.sort_by(|a, b| {
+        a.start_s
+            .partial_cmp(&b.start_s)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     chosen
 }
 
@@ -499,7 +621,7 @@ pub fn auto_color_from_rgb(rgb: &[u8]) -> AutoColorEstimate {
     let mut r = 0u64;
     let mut g = 0u64;
     let mut b = 0u64;
-    for px in rgb.chunks_exact(3) {
+    for px in rgb.chunks(3) {
         r += u64::from(px[0]);
         g += u64::from(px[1]);
         b += u64::from(px[2]);
@@ -518,18 +640,42 @@ pub fn auto_color_from_rgb(rgb: &[u8]) -> AutoColorEstimate {
         b_g_balance: if g > 0.0 { b / g } else { 1.0 },
         // Underexposed -> +exposure, oversaturated -> slight -saturation.
         suggested_exposure: ((0.42 - luma) * 1.5).clamp(-0.6, 0.6),
-        suggested_saturation: if sat > 0.55 { 0.92 } else if sat < 0.18 { 1.12 } else { 1.0 },
+        suggested_saturation: if sat > 0.55 {
+            0.92
+        } else if sat < 0.18 {
+            1.12
+        } else {
+            1.0
+        },
         suggested_temperature: ((g - r) * 0.5 + (g - b) * 0.25).clamp(-0.3, 0.3),
     }
 }
 
-fn auto_color(media: &Path, cancel: &std::sync::atomic::AtomicBool) -> Result<AutoColorEstimate, AnalysisError> {
+fn auto_color(
+    media: &Path,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<AutoColorEstimate, AnalysisError> {
     let ffmpeg = which_ffmpeg().ok_or_else(|| AnalysisError::ToolNotFound("ffmpeg".into()))?;
     let media_s = media.to_string_lossy().into_owned();
-    let (out, _) = run_ffmpeg_raw(&ffmpeg.to_string_lossy(), &[
-        "-ss", "1", "-i", &media_s,
-        "-frames:v", "1", "-vf", "scale=64:64", "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
-    ], cancel)?;
+    let (out, _) = run_ffmpeg_raw(
+        &ffmpeg.to_string_lossy(),
+        &[
+            "-ss",
+            "1",
+            "-i",
+            &media_s,
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=64:64",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-",
+        ],
+        cancel,
+    )?;
     Ok(auto_color_from_rgb(&out))
 }
 
@@ -540,7 +686,11 @@ fn run_ffmpeg_raw(
 ) -> Result<(Vec<u8>, String), AnalysisError> {
     let mut cmd = std::process::Command::new(ffmpeg);
     cmd.args(args);
-    let mut child = cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().map_err(AnalysisError::Io)?;
+    let mut child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(AnalysisError::Io)?;
     loop {
         check(cancel)?;
         match child.try_wait().map_err(AnalysisError::Io)? {
@@ -550,15 +700,21 @@ fn run_ffmpeg_raw(
                 if let Some(mut s) = child.stdout.take() {
                     let _ = s.read_to_end(&mut out);
                 }
-                let err = child.stderr.take().map(|mut s| {
-                    let mut b = Vec::new();
-                    let _ = s.read_to_end(&mut b);
-                    String::from_utf8_lossy(&b).into_owned()
-                }).unwrap_or_default();
+                let err = child
+                    .stderr
+                    .take()
+                    .map(|mut s| {
+                        let mut b = Vec::new();
+                        let _ = s.read_to_end(&mut b);
+                        String::from_utf8_lossy(&b).into_owned()
+                    })
+                    .unwrap_or_default();
                 if status.success() {
                     return Ok((out, err));
                 }
-                return Err(AnalysisError::Tool(err.lines().last().unwrap_or("unknown").to_string()));
+                return Err(AnalysisError::Tool(
+                    err.lines().last().unwrap_or("unknown").to_string(),
+                ));
             }
             None => std::thread::sleep(std::time::Duration::from_millis(30)),
         }
@@ -621,7 +777,10 @@ mod tests {
                    [blackframe @ 0x0] frame:2 pts:384 pts_time:1.5 pblack:20\n";
         let mc = parse_motion(err, 3_000, 4);
         assert_eq!(mc.per_second.len(), 3);
-        assert!(mc.per_second[1] > mc.per_second[0], "low pblack = high motion");
+        assert!(
+            mc.per_second[1] > mc.per_second[0],
+            "low pblack = high motion"
+        );
     }
 
     #[test]
@@ -633,7 +792,10 @@ mod tests {
         }
         let est = auto_color_from_rgb(&rgb);
         assert!(est.mean_luma_0_1 < 0.3);
-        assert!(est.suggested_exposure > 0.0, "dark frame should suggest +exposure");
+        assert!(
+            est.suggested_exposure > 0.0,
+            "dark frame should suggest +exposure"
+        );
         // Gray frame is neutral.
         let gray = vec![128u8; 300];
         let est2 = auto_color_from_rgb(&gray);
