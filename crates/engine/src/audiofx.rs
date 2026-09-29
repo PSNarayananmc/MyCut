@@ -94,9 +94,9 @@ pub fn build_master_chain(master: &AudioMaster, total_s: f64) -> String {
     if master.denoise {
         chain.push("afftdn=nr=12:nf=-25".to_string());
     }
-    if master.remove_silence {
-        chain.push("silenceremove=stop_periods=-1:stop_duration=0.5:stop_threshold=-35dB".to_string());
-    }
+    // NOTE: silence removal is intentionally NOT in the master chain: an
+    // audio-only time change desyncs video. Plan-level cut_ranges with
+    // strategy remove_silence shortens video+audio together.
     if master.normalize {
         chain.push("loudnorm=I=-16:TP=-1.5:LRA=11".to_string());
     }

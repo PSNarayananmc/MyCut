@@ -12,3 +12,4 @@ thiserror.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+mycut-analysis = { path = "../analysis" }

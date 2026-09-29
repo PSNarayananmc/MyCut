@@ -430,6 +430,10 @@ pub struct TransitionSetting {
 pub struct AudioMaster {
     pub normalize: bool,
     pub denoise: bool,
+    /// Silence removal is handled at CUT level (plan `cut_ranges
+    /// remove_silence`) so video+audio shorten together; an audio-only
+    /// filter here would desync A/V. Kept as a field for settings compat.
+    #[serde(default)]
     pub remove_silence: bool,
     pub duck_music_under_speech: bool,
     pub fade_in_s: f64,

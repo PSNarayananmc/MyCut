@@ -228,10 +228,10 @@ fn analyze_uncached(
     let fps = params.scene_fps;
     let (_, stderr) = run_ffmpeg(&[
         "-i", &media_s,
-        "-vf", &format!("fps={fps},scale=160:-2,select='gt(scene,0.15)',metadata=print:file=-"),
+        "-vf", &format!("fps={fps},scale=160:-2,select='gt(scene,0.15)',metadata=print"),
         "-an", "-f", "null", "-",
     ], cancel)?;
-    result.scenes = parse_scene_scores(&stderr, &stdout_from(&stderr), result.duration_ms);
+    result.scenes = parse_scene_scores(&stderr, "", result.duration_ms);
 
     // 3. Audio: silence + loudness.
     progress.map(|p| p("audio", 55));
@@ -298,55 +298,39 @@ fn probe_duration_ms(json: &str) -> i64 {
         .unwrap_or(0)
 }
 
-/// Parse `metadata=print` output: pairs of `frame:N pts:... pts_time:T` then
-/// `lavfi.scene_score=S`. Runs on the combined output blob.
+/// Parse `metadata=print` STDERR output. A cut frame prints
+/// `frame:N pts:... pts_time:T` followed by `lavfi.scene_score=S` (score
+/// belongs to the frame AT T). Scenes are recorded as
+/// `{start: previous_cut_end, end: T, score}`.
 #[must_use]
-pub fn parse_scene_scores(stdout: &str, _extra: &str, _duration_ms: i64) -> Vec<Scene> {
+pub fn parse_scene_scores(stderr: &str, _extra: &str, _duration_ms: i64) -> Vec<Scene> {
     let mut scenes: Vec<Scene> = Vec::new();
-    let mut last_t: Option<f64> = None;
-    let mut pending_score: Option<f64> = None;
-    for line in stdout.lines() {
+    let mut pending_time: Option<f64> = None;
+    let mut last_cut_end: f64 = 0.0;
+    for line in stderr.lines() {
         let line = line.trim();
-        if let Some(t) = line.strip_prefix("pts_time:") {
-            if let Ok(tv) = t.trim_end_matches(['e', '-', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '.'].as_ref()).parse::<f64>() {
-                let _ = tv;
+        // Lines look like: "[Parsed_metadata_3 @ 0x..] frame:0 pts:10 pts_time:2"
+        if let Some(pos) = line.find("pts_time:") {
+            if let Ok(tv) = line[pos + "pts_time:".len()..]
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .parse::<f64>()
+            {
+                pending_time = Some(tv);
             }
-            if let Ok(tv) = line["pts_time:".len()..].trim().parse::<f64>() {
-                if let Some(score) = pending_score {
-                    let start = last_t.unwrap_or(0.0);
-                    scenes.push(Scene { start_s: start, end_s: tv, score });
-                    last_t = Some(tv);
-                    pending_score = None;
-                } else {
-                    last_t = Some(tv);
+        } else if let Some(pos) = line.find("lavfi.scene_score=") {
+            if let Ok(score) = line[pos + "lavfi.scene_score=".len()..]
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .parse::<f64>()
+            {
+                if let Some(t) = pending_time.take() {
+                    scenes.push(Scene { start_s: last_cut_end, end_s: t, score: score.max(0.15) });
+                    last_cut_end = t;
                 }
             }
-        } else if let Some(s) = line.strip_prefix("lavfi.scene_score=") {
-            pending_score = s.trim().parse::<f64>().ok();
-            if let Some(score) = pending_score {
-                if let Some(prev_end) = scenes.last().map(|sc| sc.end_s) {
-                    // score belongs to the cut AT pts_time of next frame; stash.
-                    let _ = score;
-                    let _ = prev_end;
-                }
-            }
-        }
-    }
-    // Fallback pairing: some builds print pts_time after score.
-    if scenes.is_empty() {
-        let times: Vec<f64> = stdout
-            .lines()
-            .filter_map(|l| l.trim().strip_prefix("pts_time:"))
-            .filter_map(|v| v.trim().parse::<f64>().ok())
-            .collect();
-        let scores: Vec<f64> = stdout
-            .lines()
-            .filter_map(|l| l.trim().strip_prefix("lavfi.scene_score="))
-            .filter_map(|v| v.trim().parse::<f64>().ok())
-            .collect();
-        for (i, &t) in times.iter().enumerate().skip(1) {
-            let score = scores.get(i).copied().unwrap_or(1.0);
-            scenes.push(Scene { start_s: times[i - 1], end_s: t, score: score.max(0.15) });
         }
     }
     scenes
@@ -615,6 +599,20 @@ mod tests {
         let li = parse_loudnorm(err);
         assert_eq!(li.integrated_lufs, Some(-23.4));
         assert_eq!(li.true_peak_db, Some(-1.2));
+    }
+
+    #[test]
+    fn scene_score_pairing_score_after_time() {
+        let err = "[Parsed_metadata_3 @ 0x0] frame:0 pts:10 pts_time:2\n\
+                   [Parsed_metadata_3 @ 0x0] lavfi.scene_score=0.400000\n\
+                   [Parsed_metadata_3 @ 0x0] frame:1 pts:150 pts_time:3\n\
+                   [Parsed_metadata_3 @ 0x0] lavfi.scene_score=0.700000\n";
+        let scenes = parse_scene_scores(err, "", 5_000);
+        assert_eq!(scenes.len(), 2, "{scenes:?}");
+        assert!((scenes[0].end_s - 2.0).abs() < 1e-6);
+        assert!((scenes[0].score - 0.4).abs() < 1e-6);
+        assert!((scenes[1].start_s - 2.0).abs() < 1e-6);
+        assert!((scenes[1].end_s - 3.0).abs() < 1e-6);
     }
 
     #[test]
