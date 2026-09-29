@@ -295,6 +295,7 @@ dependencies = [
  "hex",
  "mycut-analysis",
  "mycut-core",
+ "mycut-engine",
  "mycut-schema",
  "serde",
  "serde_json",
