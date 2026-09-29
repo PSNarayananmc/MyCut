@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mycut.app/schema/edit-plan-1.0.json",
+  "title": "MyCut Edit Plan",
+  "type": "object",
+  "required": ["schema_version", "intent_summary", "operations"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "intent_summary": { "type": "string", "maxLength": 2000 },
+    "assumptions": { "type": "array", "items": { "type": "string", "maxLength": 500 }, "maxItems": 20 },
+    "needs_clarification": {
+      "type": "string",
+      "maxLength": 1000,
+      "description": "A question for the user. When present, operations SHOULD be empty."
+    },
+    "operations": {
+      "type": "array",
+      "maxItems": 400,
+      "items": { "$ref": "#/$defs/operation" }
+    }
+  },
+  "$defs": {
+    "seconds": { "type": "number", "minimum": 0, "maximum": 86400 },
+    "ratio": { "enum": ["16:9", "9:16", "1:1", "4:5"] },
+    "mode": { "enum": ["create", "modify", "remove"] },
+    "easing": { "enum": ["linear", "ease_in", "ease_out", "ease_in_out"] },
+    "operation": {
+      "type": "object",
+      "required": ["op"],
+      "additionalProperties": false,
+      "properties": {
+        "op": { "enum": [
+          "cut_ranges", "keep_ranges", "set_target_duration", "add_effect",
+          "remove_effect", "set_color", "set_aspect", "generate_captions",
+          "update_captions", "remove_captions", "add_transition",
+          "add_text", "update_text", "remove_text", "adjust_audio",
+          "set_speed", "add_marker", "set_export_preset"
+        ] },
+        "mode": { "$ref": "#/$defs/mode" },
+        "target_id": { "type": "string", "maxLength": 64, "pattern": "^[A-Za-z0-9_.:-]+$" },
+        "reason": { "type": "string", "maxLength": 300 }
+      },
+      "oneOf": [
+        { "properties": {
+            "op": { "const": "cut_ranges" },
+            "strategy": { "enum": ["remove_low_activity", "remove_silence", "explicit"] },
+            "ranges": { "type": "array", "minItems": 1, "maxItems": 200, "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["start", "end"],
+              "properties": { "start": { "$ref": "#/$defs/seconds" }, "end": { "$ref": "#/$defs/seconds" } } } }
+          }, "required": ["op", "ranges"] },
+        { "properties": {
+            "op": { "const": "keep_ranges" },
+            "ranges": { "type": "array", "minItems": 1, "maxItems": 200, "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["start", "end"],
+              "properties": { "start": { "$ref": "#/$defs/seconds" }, "end": { "$ref": "#/$defs/seconds" } } } }
+          }, "required": ["op", "ranges"] },
+        { "properties": {
+            "op": { "const": "set_target_duration" },
+            "seconds": { "type": "number", "minimum": 1, "maximum": 3600 },
+            "selection": { "enum": ["highlights", "keep_start", "keep_end", "even"] }
+          }, "required": ["op", "seconds", "selection"] },
+        { "properties": {
+            "op": { "const": "add_effect" },
+            "effect": { "enum": [
+              "zoom", "zoom_punch", "shake", "blur", "motion_blur", "sharpen",
+              "vignette", "glow", "rgb_split", "grain", "pixelate", "freeze_frame",
+              "flash", "cinematic_bars", "fisheye"
+            ] },
+            "start": { "$ref": "#/$defs/seconds" },
+            "end": { "$ref": "#/$defs/seconds" },
+            "params": { "type": "object", "maxProperties": 8 }
+          }, "required": ["op", "effect", "start", "end"] },
+        { "properties": {
+            "op": { "const": "remove_effect" },
+            "effect": { "type": "string", "maxLength": 48 }
+          }, "required": ["op", "effect"] },
+        { "properties": {
+            "op": { "const": "set_color" },
+            "merge_with_existing": { "type": "boolean", "default": true },
+            "params": {
+              "type": "object", "additionalProperties": false,
+              "properties": {
+                "exposure": { "type": "number", "minimum": -3, "maximum": 3 },
+                "contrast": { "type": "number", "minimum": 0.1, "maximum": 3 },
+                "saturation": { "type": "number", "minimum": 0, "maximum": 3 },
+                "vibrance": { "type": "number", "minimum": -1, "maximum": 1 },
+                "temperature": { "type": "number", "minimum": -1, "maximum": 1 },
+                "gamma": { "type": "number", "minimum": 0.1, "maximum": 3 },
+                "shadows": { "type": "number", "minimum": -1, "maximum": 1 },
+                "highlights": { "type": "number", "minimum": -1, "maximum": 1 },
+                "lut": { "type": "string", "maxLength": 120 },
+                "lut_intensity": { "type": "number", "minimum": 0, "maximum": 1 }
+              }
+            }
+          }, "required": ["op", "params"] },
+        { "properties": {
+            "op": { "const": "set_aspect" },
+            "ratio": { "$ref": "#/$defs/ratio" },
+            "reframe": { "enum": ["center", "subject_follow", "smart"] }
+          }, "required": ["op", "ratio", "reframe"] },
+        { "properties": {
+            "op": { "const": "generate_captions" },
+            "style": { "enum": ["minimal", "gaming", "tiktok", "youtube", "cinematic", "bold", "karaoke", "word_highlight", "streamer"] },
+            "language": { "type": "string", "maxLength": 12 },
+            "safe_area": { "enum": ["default", "avoid_center", "bottom"] },
+            "max_words_per_line": { "type": "integer", "minimum": 1, "maximum": 12 },
+            "scale": { "type": "number", "minimum": 0.3, "maximum": 2.5 }
+          }, "required": ["op", "style"] },
+        { "properties": {
+            "op": { "const": "update_captions" },
+            "style": { "enum": ["minimal", "gaming", "tiktok", "youtube", "cinematic", "bold", "karaoke", "word_highlight", "streamer"] },
+            "scale": { "type": "number", "minimum": 0.3, "maximum": 2.5 },
+            "safe_area": { "enum": ["default", "avoid_center", "bottom"] }
+          }, "required": ["op"] },
+        { "properties": { "op": { "const": "remove_captions" } }, "required": ["op"] },
+        { "properties": {
+            "op": { "const": "add_transition" },
+            "transition": { "enum": ["cut", "fade", "crossfade", "dip_to_black", "dip_to_white", "slide", "push", "zoom", "blur", "wipe"] },
+            "at_index": { "type": "integer", "minimum": 0 },
+            "duration": { "type": "number", "minimum": 0.05, "maximum": 3 }
+          }, "required": ["op", "transition"] },
+        { "properties": {
+            "op": { "const": "add_text" },
+            "text": { "type": "string", "minLength": 1, "maxLength": 300 },
+            "start": { "$ref": "#/$defs/seconds" },
+            "end": { "$ref": "#/$defs/seconds" },
+            "kind": { "enum": ["title", "lower_third", "callout", "watermark"] },
+            "position": { "enum": ["top_left", "top_right", "bottom_left", "bottom_right", "center", "top_center", "bottom_center"] },
+            "scale": { "type": "number", "minimum": 0.3, "maximum": 3 },
+            "opacity": { "type": "number", "minimum": 0.05, "maximum": 1 }
+          }, "required": ["op", "text", "start", "end", "kind"] },
+        { "properties": {
+            "op": { "const": "update_text" },
+            "target_id": { "type": "string" },
+            "text": { "type": "string", "minLength": 1, "maxLength": 300 },
+            "scale": { "type": "number", "minimum": 0.3, "maximum": 3 },
+            "opacity": { "type": "number", "minimum": 0.05, "maximum": 1 },
+            "position": { "enum": ["top_left", "top_right", "bottom_left", "bottom_right", "center", "top_center", "bottom_center"] }
+          }, "required": ["op", "target_id"] },
+        { "properties": {
+            "op": { "const": "remove_text" },
+            "target_id": { "type": "string" }
+          }, "required": ["op", "target_id"] },
+        { "properties": {
+            "op": { "const": "adjust_audio" },
+            "params": {
+              "type": "object", "additionalProperties": false,
+              "properties": {
+                "volume": { "type": "number", "minimum": 0, "maximum": 4 },
+                "normalize": { "type": "boolean" },
+                "denoise": { "type": "boolean" },
+                "remove_silence": { "type": "boolean" },
+                "duck_music_under_speech": { "type": "boolean" },
+                "fade_in": { "type": "number", "minimum": 0, "maximum": 10 },
+                "fade_out": { "type": "number", "minimum": 0, "maximum": 10 }
+              }
+            }
+          }, "required": ["op", "params"] },
+        { "properties": {
+            "op": { "const": "set_speed" },
+            "start": { "$ref": "#/$defs/seconds" },
+            "end": { "$ref": "#/$defs/seconds" },
+            "speed": { "type": "number", "minimum": 0.25, "maximum": 4 }
+          }, "required": ["op", "start", "end", "speed"] },
+        { "properties": {
+            "op": { "const": "add_marker" },
+            "time": { "$ref": "#/$defs/seconds" },
+            "label": { "type": "string", "maxLength": 80 }
+          }, "required": ["op", "time"] },
+        { "properties": {
+            "op": { "const": "set_export_preset" },
+            "preset": { "enum": ["youtube", "youtube_shorts", "instagram_reels", "tiktok", "discord", "twitter_x", "custom"] }
+          }, "required": ["op", "preset"] }
+      ]
+    }
+  }
+}
