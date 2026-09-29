@@ -3,6 +3,8 @@
 //!
 //! Sources are stored project-relative; content hashes support relink.
 
+pub mod secret;
+
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};

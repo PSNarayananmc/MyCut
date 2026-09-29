@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/components/ChatPanel.tsx","./src/components/ExportPanel.tsx","./src/components/MediaBin.tsx","./src/components/SettingsPanel.tsx","./src/components/TimelineView.tsx","./src/i18n/en.ts","./src/lib/bridge.ts"],"version":"5.9.3"}

@@ -1,0 +1,22 @@
+[package]
+name = "mycut-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mycut-core = { path = "../crates/core" }
+mycut-projects = { path = "../crates/projects", features = ["os-keyring"] }
+mycut-schema = { path = "../crates/schema" }
+mycut-engine = { path = "../crates/engine" }
+mycut-analysis = { path = "../crates/analysis" }
+mycut-captions = { path = "../crates/captions" }
+mycut-ai = { path = "../crates/ai" }
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }

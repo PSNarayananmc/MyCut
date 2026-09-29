@@ -12,3 +12,7 @@ thiserror.workspace = true
 tempfile.workspace = true
 sha2.workspace = true
 hex.workspace = true
+keyring = { workspace = true, optional = true }
+
+[features]
+os-keyring = ["dep:keyring"]
