@@ -8,10 +8,11 @@ pub mod time;
 pub use command::{apply_transaction, Command, History};
 pub use error::CoreError;
 pub use model::{
-    AspectRatio, AudioCodec, CaptionEntry, CaptionStyle, CaptionWord, ColorGrade, Container,
-    EffectInstance, ExportSettings, Item, ItemKind, Keyframe, KeyframeTrack, Marker, MediaRole,
-    ParamValue, PlanReport, Project, ReframeMode, ReframeSettings, Source, TextKind, Track,
-    TrackKind, VideoCodec, SCHEMA_VERSION,
+    AspectRatio, AudioCodec, AudioMaster, CaptionEntry, CaptionStyle, CaptionWord, ColorGrade,
+    Container, EffectInstance, ExportSettings, Item, ItemKind, Keyframe, KeyframeTrack, Marker,
+    MediaRole, ParamValue, PlanReport, Project, ReframeMode, ReframeSettings, Source, TextKind,
+    Track, Position, TrackKind, TransitionKind, TransitionSetting, VideoCodec, SCHEMA_VERSION,
+    now_unix_ms,
 };
 pub use time::{ms_to_seconds, new_id, seconds_to_ms, Easing, TimeMs};
 

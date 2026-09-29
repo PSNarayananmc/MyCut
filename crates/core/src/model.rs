@@ -383,6 +383,59 @@ pub struct Marker {
     pub label: String,
 }
 
+/// Transition between consecutive video-track items.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionKind {
+    Cut,
+    Fade,
+    Crossfade,
+    DipToBlack,
+    DipToWhite,
+    Slide,
+    Push,
+    Zoom,
+    Wipe,
+}
+
+impl TransitionKind {
+    /// The xfade transition name used by the engine. `None` = hard cut.
+    #[must_use]
+    pub fn ffmpeg_name(self) -> Option<&'static str> {
+        match self {
+            TransitionKind::Cut => None,
+            TransitionKind::Fade | TransitionKind::Crossfade => Some("fade"),
+            TransitionKind::DipToBlack => Some("fadeblack"),
+            TransitionKind::DipToWhite => Some("fadewhite"),
+            TransitionKind::Slide => Some("slideleft"),
+            TransitionKind::Push => Some("pushleft"),
+            TransitionKind::Zoom => Some("zoomin"),
+            TransitionKind::Wipe => Some("wipeleft"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransitionSetting {
+    /// Applied between video item `index` and `index+1` (0-based, sorted by
+    /// timeline start). `Cut` means "explicitly no transition".
+    pub after_index: usize,
+    pub kind: TransitionKind,
+    pub duration_ms: TimeMs,
+}
+
+/// Project-level master audio settings (applied after track mixing).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct AudioMaster {
+    pub normalize: bool,
+    pub denoise: bool,
+    pub remove_silence: bool,
+    pub duck_music_under_speech: bool,
+    pub fade_in_s: f64,
+    pub fade_out_s: f64,
+}
+
 /// The canonical project. Serialize => `.mycut` content.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -394,9 +447,12 @@ pub struct Project {
     pub sources: Vec<Source>,
     pub tracks: Vec<Track>,
     pub color: ColorGrade,
+    pub audio: AudioMaster,
     pub reframe: Option<ReframeSettings>,
     pub export: ExportSettings,
     pub markers: Vec<Marker>,
+    #[serde(default)]
+    pub transitions: Vec<TransitionSetting>,
     /// Human-readable reports of applied AI plans (diff summaries, repairs).
     pub plan_reports: Vec<PlanReport>,
 }
@@ -432,9 +488,11 @@ impl Project {
                 Self::track(TrackKind::Text, "Text"),
             ],
             color: ColorGrade::default(),
+            audio: AudioMaster::default(),
             reframe: None,
             export: ExportSettings::default(),
             markers: Vec::new(),
+            transitions: Vec::new(),
             plan_reports: Vec::new(),
         }
     }

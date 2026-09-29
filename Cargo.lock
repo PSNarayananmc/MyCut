@@ -356,6 +356,7 @@ dependencies = [
  "mycut-core",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
 ]
 
