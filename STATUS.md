@@ -22,6 +22,22 @@ cargo run -p mycut-cli -- e2e target/e2e
 | UI typecheck + production bundle | **PASSED** | `npm --prefix ui run build` (strict tsc) |
 | Live NIM test | **not run here** (no API key in sandbox) | `NVIDIA_NIM_API_KEY=... cargo test -p mycut-ai -- --ignored` |
 
+## Linux packaging & Ubuntu 20.04 (v0.2.0)
+
+| Requirement | State | Evidence |
+|---|---|---|
+| Ubuntu 20.04 / GLIBC 2.31 compatibility strategy | **done** | docs/DECISIONS.md D15/D16; Local Web Runtime (`crates/server`, bin `mycut`) + preserved Tauri 2 shell |
+| GLIBC symbol ceiling on shipped binaries | **done** | `build/check-glibc.sh`: `mycut`/`mycut-cli` -> GLIBC_2.30, sidecar ffmpeg/ffprobe -> GLIBC_2.28, all <= 2.31; NEEDED-whitelist enforced |
+| Reproducible build environment | **done** | `build/ubuntu-20.04/Dockerfile` (pinned node 20.18.1, rust 1.98.1, ziglang 0.16.0, cargo-zigbuild 0.23.4), `build/build.sh` |
+| .deb package | **done** | `dist/MyCut_0.2.0_amd64.deb` (101 MB): `/opt/mycut/bin/{mycut,ffmpeg,ffprobe}`, wrapper, desktop entry, hicolor icons, `Depends: libc6 (>= 2.31)` only; extract-tested: server + /health + UI serve OK |
+| AppImage | **done** | `dist/MyCut_0.2.0_amd64.AppImage` (139 MB), pinned appimagetool, AppRun wires bundled sidecar; full E2E from a non-repo dir: import -> snapshot -> render -> ffprobe-verified 6.000s h264+aac MP4; external-media Range streaming 206; jail 403 on /etc/passwd |
+| FFmpeg tri-state detection (missing/too-old/ok) | **done** | `doctor` command + startup banner; `parse_version` handles `n8.1.3` and `7.1.5` schemes (unit tests) |
+| Bundled FFmpeg sidecar (reproducible) | **done** | `build/fetch-ffmpeg.sh` pins BtbN `n8.1.3-6-gff48edd8b2-linux64-gpl-8.1` by SHA256; minimum version 4.3 documented (xfade) |
+| CI/CD | **done** | `.github/workflows/build.yml`: ubuntu:20.04 container, pinned toolchains, tests, glibc gate, both packages, smoke tests, artifact upload, tag releases |
+| NVIDIA NIM preserved across runtimes | **done** | Same provider/config/secret-store used by both shells; `ai_test_connection` live command; key never leaves Rust (canary tests) |
+| Runtime E2E over real HTTP | **done** | `crates/server/tests/http_e2e.rs`: 4 tests (full pipeline, security jail/headers, undo/redo+settings, doctor) — green |
+| Test totals | **115 passed, 0 failed** | `cargo test --workspace` (was 106) |
+
 ## Phase 1 — Foundations
 
 | Requirement | State | Evidence |

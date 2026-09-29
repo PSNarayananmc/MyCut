@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { api, assetUrl, backendAvailable, type ProjectSnapshot } from "./lib/bridge";
+import { api, assetUrl, backendAvailable, backendKind, type ProjectSnapshot } from "./lib/bridge";
 import { strings as t } from "./i18n/en";
 import MediaBin from "./components/MediaBin";
 import TimelineView from "./components/TimelineView";
@@ -26,6 +26,18 @@ const App: React.FC = () => {
   }, [refresh]);
 
   const onImport = useCallback(() => {
+    if (backendKind() === "server") {
+      // The browser cannot hand the server absolute paths; the local web
+      // runtime imports by explicit path (Tauri build has the native dialog).
+      const raw = window.prompt(
+        "Import media — absolute path(s), comma-separated\n(e.g. /home/you/Videos/clip1.mp4, /home/you/Videos/clip2.mp4)",
+        "",
+      );
+      if (!raw || !raw.trim()) return;
+      const paths = raw.split(",").map((s) => s.trim()).filter(Boolean);
+      api.importMedia(paths).then(() => refresh()).catch((e) => alert(String(e)));
+      return;
+    }
     // The Rust side opens the native file dialog (paths stay in Rust).
     api
       .importMedia([])
@@ -67,6 +79,9 @@ const App: React.FC = () => {
           Save
         </button>
         {offline && <span className="badge net">backend offline (UI dev mode)</span>}
+        {!offline && backendKind() === "server" && (
+          <span className="badge net" title="Editing runs in this local process; the UI is served to your browser.">local runtime</span>
+        )}
       </header>
 
       <div className="main">

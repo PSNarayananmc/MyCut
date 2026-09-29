@@ -9,6 +9,7 @@ members = [
     "crates/captions",
     "crates/ai",
     "crates/cli",
+    "crates/server",
 ]
 # The GUI shell needs webkit2gtk; headless CI builds/tests default-members only.
 default-members = [
@@ -20,14 +21,15 @@ default-members = [
     "crates/captions",
     "crates/ai",
     "crates/cli",
+    "crates/server",
 ]
 exclude = ["src-tauri"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
-repository = "https://example.invalid/mycut"
+repository = "https://github.com/PSNarayananmc/MyCut"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

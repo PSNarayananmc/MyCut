@@ -23,7 +23,8 @@ upon.
 
 | Binary | License | Why separate |
 |---|---|---|
-| FFmpeg / ffprobe | LGPL-2.1-or-later as configured for bundling (appimage script prefers an LGPL static build; the distro build used in CI is Debian's ffmpeg) | Media engine. MyCut spawns it as a child process with argument arrays and exchanges data only via files/stdin/stdout. If a GPL-enabled FFmpeg build is bundled, the distributor must comply with GPL-3 for that binary. |
+| FFmpeg / ffprobe (bundled sidecar) | GPL-3-or-later (BtbN linux64-gpl build; static, with libx264/libass) | Media engine. Source code: https://github.com/BtbN/FFmpeg-Builds and https://ffmpeg.org/download.html. Pinned build: `ffmpeg-n8.1.3-6-gff48edd8b2-linux64-gpl-8.1.tar.xz`, SHA256 `9f96ca3806df5926dc6645a93fab35c2ed3783c9824c319ca99e9dc6dc286875` (build/fetch-ffmpeg.sh). MyCut spawns it as a child process with argument arrays and exchanges data only via files/stdin/stdout; because the bundled binary is GPL-enabled, distributors of that binary must comply with GPL-3 for it. MyCut's own code remains MIT. |
+| FFmpeg / ffprobe (system) | LGPL-2.1-or-later as shipped by your distro | Used when `MYCUT_USE_SYSTEM_FFMPEG=1`; nothing bundled by MyCut. |
 | whisper.cpp (optional user download) | MIT | ASR. User-installed binary + user-downloaded ggml models; never bundled. |
 
 ## Optional downloads (never bundled; size + license shown at download time)

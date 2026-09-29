@@ -29,6 +29,34 @@ pub fn resolve_in_project(project_dir: &Path, rel: &str) -> Result<PathBuf, Engi
     check_canonical(project_dir, &joined)
 }
 
+/// Resolve a media source path for rendering:
+/// - **relative** -> strict project jail (unchanged; refuses `..` and
+///   symlink escapes);
+/// - **absolute** -> external media, recorded verbatim at import time by the
+///   user's own action (file dialog / explicit path import) and relinkable
+///   by content hash. Must exist, must not contain `..` components, and is
+///   canonicalized before use. The AI planner can only reference sources
+///   that already exist in the project, so this branch never widens what a
+///   plan may reach; it only makes the documented "external media" concept
+///   actually renderable.
+pub fn resolve_media(project_dir: &Path, rel: &str) -> Result<PathBuf, EngineError> {
+    if rel.trim().is_empty() {
+        return Err(EngineError::UnsafePath("empty path".into()));
+    }
+    let p = Path::new(rel);
+    if p.is_absolute() {
+        if p.components().any(|c| matches!(c, Component::ParentDir)) {
+            return Err(EngineError::UnsafePath(format!(
+                "`..` component rejected: {rel}"
+            )));
+        }
+        p.canonicalize()
+            .map_err(|e| EngineError::UnsafePath(format!("media missing ({rel}): {e}")))
+    } else {
+        resolve_in_project(project_dir, rel)
+    }
+}
+
 fn check_canonical(project_dir: &Path, candidate: &Path) -> Result<PathBuf, EngineError> {
     let root = project_dir
         .canonicalize()
@@ -68,6 +96,24 @@ fn check_canonical(project_dir: &Path, candidate: &Path) -> Result<PathBuf, Engi
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn resolve_media_allows_user_imported_absolute_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let ext = tempfile::tempdir().unwrap();
+        let media = ext.path().join("external.mp4");
+        fs::write(&media, b"x").unwrap();
+        // Absolute external media resolves (documented external-media case).
+        let got = resolve_media(dir.path(), &media.to_string_lossy()).unwrap();
+        assert_eq!(got, media.canonicalize().unwrap());
+        // `..` in absolute paths stays rejected.
+        let sneaky = format!("{}/../etc/passwd", ext.path().display());
+        assert!(resolve_media(dir.path(), &sneaky).is_err());
+        // Missing absolute media errors instead of silently continuing.
+        assert!(resolve_media(dir.path(), "/definitely/not/here.mp4").is_err());
+        // Relative paths keep the strict jail.
+        assert!(resolve_media(dir.path(), "../../etc/passwd").is_err());
+    }
 
     #[test]
     fn resolves_relative_inside_jail() {

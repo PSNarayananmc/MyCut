@@ -138,7 +138,9 @@ impl NvidiaNimProvider {
     }
 
     fn request_once(&self, req: &PlanRequest) -> Result<PlanResponse, (AiError, Option<u64>)> {
-        let agent = ureq::AgentBuilder::new().timeout(Duration::from_secs(self.cfg.timeout_secs)).build();
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(self.cfg.timeout_secs))
+            .build();
         let url = format!(
             "{}/chat/completions",
             self.cfg.base_url.trim_end_matches('/')
@@ -255,14 +257,9 @@ impl AIProvider for NvidiaNimProvider {
                         .map(|d| d.subsec_millis())
                         .unwrap_or(0)) as u64
                         % 100;
-                    let backoff =
-                        retry_after
-                            .map(Duration::from_secs)
-                            .unwrap_or_else(|| {
-                                Duration::from_millis(
-                                    self.cfg.backoff_base_ms * (1u64 << attempt) + jitter,
-                                )
-                            });
+                    let backoff = retry_after.map(Duration::from_secs).unwrap_or_else(|| {
+                        Duration::from_millis(self.cfg.backoff_base_ms * (1u64 << attempt) + jitter)
+                    });
                     std::thread::sleep(backoff.min(Duration::from_secs(30)));
                     attempt += 1;
                 }

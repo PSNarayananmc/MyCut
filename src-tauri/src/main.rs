@@ -11,14 +11,12 @@ use std::sync::Mutex;
 use mycut_ai::{plan_and_apply, ContextSummary, NvidiaNimProvider, NimConfig, AIProvider, SourceSummary, TimelineSummary, AnalysisDigest};
 use mycut_core::{History, Project, TimeMs};
 use mycut_engine::{HwChoice, RenderEngine};
-use mycut_projects::{config_dir, secret, ProjectDocument};
-use mycut_schema::apply::plan_to_commands;
+use mycut_projects::{secret, ProjectDocument};
 use mycut_schema::validate::PlanContext;
-use mycut_schema::EditPlan;
 use serde::Serialize;
 
 mod settings;
-use settings::AppSettings;
+use settings::{config_dir, AppSettings};
 
 struct AppState {
     doc: Mutex<ProjectDocument>,
@@ -190,11 +188,17 @@ fn import_media(state: tauri::State<'_, AppState>, _paths: Vec<String>) -> Resul
             0,
             source.duration_ms,
         );
-        doc.history.apply(&mut doc.project, mycut_core::Command::AddSource { source: source.clone() })
-            .map_err(|e| e.to_string())?;
+        {
+            let (project, history) = (&mut doc.project, &mut doc.history);
+            history.apply(project, mycut_core::Command::AddSource { source: source.clone() })
+                .map_err(|e| e.to_string())?;
+        }
         let kind = if probe.video_stream().is_some() { mycut_core::TrackKind::Video } else { mycut_core::TrackKind::Audio };
-        doc.history.apply(&mut doc.project, mycut_core::Command::AddClip { track_kind: kind, item })
-            .map_err(|e| e.to_string())?;
+        {
+            let (project, history) = (&mut doc.project, &mut doc.history);
+            history.apply(project, mycut_core::Command::AddClip { track_kind: kind, item })
+                .map_err(|e| e.to_string())?;
+        }
         // Thumbnail + proxy best-effort (job system owns this in the GUI loop).
         if let Ok(thumb) = engine.build_thumbnail_command(&path, probe.duration_ms() / 3, &project_dir.join(format!("{}.jpg", source.id)), 160) {
             let _ = std::process::Command::new(&thumb.program).args(&thumb.args).status();
@@ -287,7 +291,10 @@ fn ai_apply_request(
         allowed_dirs: vec![project_dir.clone(), PathBuf::from("/usr/share/mycut/luts")],
     };
 
-    let outcome = plan_and_apply(&provider, &mut doc.project, &mut doc.history, &schema_ctx, &summary, settings.frames_enabled, &state.cancel);
+    let outcome = {
+        let (project, history) = (&mut doc.project, &mut doc.history);
+        plan_and_apply(&provider, project, history, &schema_ctx, &summary, settings.frames_enabled, &state.cancel)
+    };
     let path = state.project_path.lock().unwrap().clone();
     let _ = mycut_projects::save_project(&doc.project, &doc.history, &path);
     if !outcome.applied {
@@ -320,7 +327,7 @@ fn ai_test_connection(state: tauri::State<'_, AppState>) -> Result<serde_json::V
     let key = read_api_key(&state);
     let cfg = NimConfig { api_key: key, base_url: settings.base_url.clone(), model: settings.model.clone(), ..NimConfig::default() };
     let provider = NvidiaNimProvider::new(cfg);
-    match provider.test_connection() {
+    match provider.test_connection_cancellable(&std::sync::atomic::AtomicBool::new(false)) {
         Ok(()) => Ok(serde_json::json!({"ok": true, "state": "Connected."})),
         Err(e) => Ok(serde_json::json!({"ok": false, "state": e.to_string()})),
     }
@@ -374,7 +381,11 @@ fn write_captions_ass(doc: &ProjectDocument, project_dir: &PathBuf) -> Result<()
 #[tauri::command]
 fn undo(state: tauri::State<'_, AppState>) -> Result<String, String> {
     let mut doc = state.doc.lock().unwrap();
-    let label = doc.history.undo(&mut doc.project).map_err(|e| e.to_string())?;
+    let label = {
+        let (project, history) = (&mut doc.project, &mut doc.history);
+        history.undo(project)
+    }
+    .map_err(|e| e.to_string())?;
     let path = state.project_path.lock().unwrap().clone();
     let _ = mycut_projects::save_project(&doc.project, &doc.history, &path);
     Ok(label)
@@ -383,7 +394,11 @@ fn undo(state: tauri::State<'_, AppState>) -> Result<String, String> {
 #[tauri::command]
 fn redo(state: tauri::State<'_, AppState>) -> Result<String, String> {
     let mut doc = state.doc.lock().unwrap();
-    let label = doc.history.redo(&mut doc.project).map_err(|e| e.to_string())?;
+    let label = {
+        let (project, history) = (&mut doc.project, &mut doc.history);
+        history.redo(project)
+    }
+    .map_err(|e| e.to_string())?;
     let path = state.project_path.lock().unwrap().clone();
     let _ = mycut_projects::save_project(&doc.project, &doc.history, &path);
     Ok(label)

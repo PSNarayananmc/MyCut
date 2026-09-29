@@ -1,0 +1,30 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Node / frontend
+node_modules/
+ui/dist/
+src-tauri/dist/
+src-tauri/gen/
+
+# Build outputs & caches
+dist/
+build/_cache/
+target-appimage/
+
+# Editor / OS noise
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local env & secrets — never commit
+.env
+.env.*
+*.local
+*.key
+NVIDIA_NIM_API_KEY*
+
+# Test / benchmark evidence (reproducible on demand)
+target/e2e/

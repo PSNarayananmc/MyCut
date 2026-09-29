@@ -1,0 +1,28 @@
+[package]
+name = "mycut-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "MyCut local web runtime: serves the MyCut UI and command API over loopback HTTP"
+
+[[bin]]
+name = "mycut"
+path = "src/main.rs"
+
+[lib]
+name = "mycut_server"
+path = "src/lib.rs"
+
+[dependencies]
+mycut-core = { path = "../core" }
+mycut-projects = { path = "../projects", features = ["os-keyring"] }
+mycut-schema = { path = "../schema" }
+mycut-engine = { path = "../engine" }
+mycut-analysis = { path = "../analysis" }
+mycut-captions = { path = "../captions" }
+mycut-ai = { path = "../ai" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,7 +1,10 @@
 /**
- * Typed bridge to the Rust core. In the Tauri app this maps to `invoke`;
- * in a plain browser (dev) the backend is absent and every call resolves
- * to a HONEST "backend unavailable" state — nothing is faked.
+ * Typed bridge to the Rust core. Two transports, one command surface:
+ * - Tauri app      → `invoke` over Tauri IPC (`__TAURI_INTERNALS__`)
+ * - Local web run  → `POST /api/<cmd>` JSON to the loopback server
+ *                    (`mycut` binary — the Ubuntu 20.04 runtime, D15)
+ * - Plain file:// or `vite dev` without backend → honest "backend
+ *   unavailable" state. Nothing is faked.
  */
 
 export interface SourceInfo {
@@ -55,9 +58,11 @@ export interface AiDiff {
   clarification?: string;
 }
 
+export type BackendKind = "tauri" | "server" | "none";
+
 type InvokeFn = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
 
-/** Real Tauri IPC when available; undefined in a plain browser. */
+/** Real Tauri IPC when available; undefined elsewhere. */
 function tauriInvoke(): InvokeFn | null {
   const w = window as unknown as { __TAURI_INTERNALS__?: { invoke: InvokeFn } };
   if (w.__TAURI_INTERNALS__?.invoke) {
@@ -66,14 +71,49 @@ function tauriInvoke(): InvokeFn | null {
   return null;
 }
 
-export const backendAvailable = (): boolean => tauriInvoke() !== null;
+export function backendKind(): BackendKind {
+  if (tauriInvoke()) return "tauri";
+  if (typeof window !== "undefined" && window.location.protocol.startsWith("http")) {
+    return "server";
+  }
+  return "none";
+}
+
+export const backendAvailable = (): boolean => backendKind() !== "none";
+
+async function serverInvoke(cmd: string, args?: Record<string, unknown>): Promise<unknown> {
+  const resp = await fetch(`api/${cmd}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-MyCut": "1" },
+    body: JSON.stringify(args ?? {}),
+    credentials: "omit",
+    cache: "no-store",
+  });
+  let payload: unknown = null;
+  try {
+    payload = await resp.json();
+  } catch {
+    /* non-JSON body */
+  }
+  if (!resp.ok) {
+    const msg =
+      payload && typeof payload === "object" && "error" in payload
+        ? String((payload as { error: unknown }).error)
+        : `HTTP ${resp.status}`;
+    throw new Error(msg);
+  }
+  return payload;
+}
 
 export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  const fn = tauriInvoke();
-  if (!fn) {
-    throw new Error("backend-unavailable");
+  const kind = backendKind();
+  if (kind === "tauri") {
+    return tauriInvoke()!(cmd, args) as Promise<T>;
   }
-  return fn(cmd, args) as Promise<T>;
+  if (kind === "server") {
+    return serverInvoke(cmd, args) as Promise<T>;
+  }
+  throw new Error("backend-unavailable");
 }
 
 // ---- typed commands ----
@@ -81,9 +121,9 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
 export const api = {
   invoke,
   projectSnapshot: () => invoke<ProjectSnapshot>("project_snapshot"),
-  importMedia: (paths: string[]) => invoke<{ sources: SourceInfo[] }>("import_media", { paths }),
+  importMedia: (paths: string[]) => invoke<{ ok: boolean }>("import_media", { paths }),
   applyAiRequest: (request: string) => invoke<AiDiff>("ai_apply_request", { request }),
-  renderFinal: (outPath: string) => invoke<{ seconds: number }>("render_final", { outPath }),
+  renderFinal: (outPath: string) => invoke<{ path: string; seconds: number }>("render_final", { outPath }),
   renderPreviewRange: (startMs: number, endMs: number) =>
     invoke<{ path: string }>("render_preview_range", { startMs, endMs }),
   undo: () => invoke<string>("undo"),
@@ -97,13 +137,25 @@ export const api = {
   clearCache: () => invoke<void>("clear_cache"),
   cacheUsage: () => invoke<{ bytes: number; limitBytes: number }>("cache_usage"),
   proxyPath: (sourceId: string) => invoke<{ path: string }>("proxy_path", { sourceId }),
+  doctor: () =>
+    invoke<{
+      appVersion: string;
+      runtime: string;
+      ffmpeg: { state: string; version?: string; minimum: string; path?: string; message: string; usingBundled: boolean };
+    }>("doctor"),
 };
 
-/** Convert an app path to something a webview <video> can load. */
+/** Convert an app path to something a <video>/<img> element can load. */
 export function assetUrl(p: string): string {
-  const w = window as unknown as { __TAURI_INTERNALS__?: { convertFileSrc?: (p: string) => string } };
-  if (w.__TAURI_INTERNALS__?.convertFileSrc) {
-    return w.__TAURI_INTERNALS__.convertFileSrc(p);
+  if (backendKind() === "tauri") {
+    const w = window as unknown as { __TAURI_INTERNALS__?: { convertFileSrc?: (p: string) => string } };
+    if (w.__TAURI_INTERNALS__?.convertFileSrc) {
+      return w.__TAURI_INTERNALS__.convertFileSrc(p);
+    }
+  }
+  if (backendKind() === "server") {
+    // Jailed server-side: project dir, cache dir, export dir only.
+    return `media?path=${encodeURIComponent(p)}`;
   }
   return p;
 }

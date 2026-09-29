@@ -868,7 +868,5 @@ fn tl_for_src(project: &Project, cid: &str, src_ms: TimeMs) -> TimeMs {
 // Re-export for the CLI/app layers.
 pub use crate::validate::ValidationResult;
 
-
-
 #[allow(unused_imports)]
 use PlanError as _PlanErrorImport;

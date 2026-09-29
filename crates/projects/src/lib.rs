@@ -12,6 +12,20 @@ use std::path::{Path, PathBuf};
 use mycut_core::{CoreError, History, Project, SCHEMA_VERSION};
 use serde::{Deserialize, Serialize};
 
+/// XDG user config dir — the canonical location for settings and the
+/// fallback secret store (shared by the Tauri shell and the local web
+/// runtime so both shells see the same configuration).
+#[must_use]
+pub fn config_dir() -> PathBuf {
+    std::env::var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::var("HOME")
+                .map(|h| PathBuf::from(h).join(".config"))
+                .unwrap_or_else(|_| PathBuf::from("."))
+        })
+}
+
 /// On-disk document. `schema_version` is the *document* version (may differ
 /// from `project.schema_version` after migration).
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -157,3 +157,72 @@ builds/tests workspace + UI; packaging machines build the app crate.
 
 **Why.** webkit2gtk is unavailable in headless sandboxes; excluding it keeps
 every core gate green and honest, and the split is documented.
+
+## D15 — Ubuntu 20.04 (GLIBC 2.31) compatibility: local web runtime, Tauri GUI preserved for newer distros
+
+**Decision.** The Ubuntu 20.04 packages (.deb, .AppImage) ship the **MyCut
+Local Web Runtime**: a small loopback HTTP server (`mycut`, crate
+`crates/server`) that serves the exact same React UI and exposes the exact
+same typed command surface as the Tauri shell (`project_snapshot`,
+`import_media`, `ai_apply_request`, … 16 commands + a `doctor` diagnostic).
+The UI's typed bridge (`ui/src/lib/bridge.ts`) gains an HTTP transport for
+this mode; the Tauri IPC transport is untouched. Tauri 2 (`src-tauri/`)
+remains in-tree, unmodified in behavior, as the desktop build for distros
+that ship WebKitGTK 4.1 (22.04+). Native Rust binaries are built with the
+GLIBC symbol ceiling pinned at **2.31** (`cargo-zigbuild --target
+x86_64-unknown-linux-gnu.2.31`), and the build gate
+(`build/check-glibc.sh`) hard-fails on any `GLIBC_2.32+` requirement.
+
+**Why.** Tauri 2 on Linux hard-depends on `webkit2gtk-4.1` (libsoup3). No
+Ubuntu 20.04 package provides that API (20.04 ships WebKitGTK 2.28 /
+`libwebkit2gtk-4.0-37` / libsoup2 only). Every distro that *does* ship 4.1
+requires GLIBC ≥ 2.34, so bundling a WebKitGTK 4.1 stack would either break
+the GLIBC 2.31 cap or require shipping a replacement glibc — explicitly
+forbidden. Porting to Tauri 1.x would mean a second, EOL shell plus an
+Ubuntu-20.04-only link environment while still fragmenting the codebase.
+The local web runtime keeps **100% of the core** (engine, analysis, NIM
+planning, captions, projects, undo), reuses the same UI code and the same
+command implementations, adds zero WebKitGTK dependency, uses less RAM on
+the 8 GB target machine (no embedded WebKit process), and works with any
+browser the user already has. This is the "alternative Linux frontend
+runtime strategy + separate 20.04 target preserving the modern build"
+option, chosen after the others were ruled out on technical grounds.
+
+**Rejected.**
+- *Bundle WebKitGTK 4.1*: no GLIBC-2.31-compatible build exists; building
+  WebKitGTK against glibc 2.31 from source is days of fragile compilation.
+- *Port to Tauri 1.x*: EOL framework, duplicated shell + config, requires
+  a 20.04 link environment for the 4.0 API; still a second codebase to
+  maintain forever.
+- *Fake it*: shipping `libwebkit2gtk-4.1-0` as a deb dependency that cannot
+  be installed on 20.04 — dependency metadata lying, forbidden.
+
+**Consequences.** In server mode there is no native file dialog (browsers
+cannot hand the server absolute paths): `import_media` takes explicit
+paths — the launcher accepts `--import PATH…`, and the Import button in
+server mode asks for a path (honest UI, documented). Preview/export
+download links go through the jailed `/media` endpoint. CI builds the
+20.04 target inside an `ubuntu:20.04` container and runs the GLIBC gate;
+the Tauri GUI is built separately on newer distros.
+
+## D16 — FFmpeg delivery: bundled pinned static build, system FFmpeg override
+
+**Decision.** Both Linux packages bundle a pinned, checksum-verified static
+FFmpeg/ffprobe build (GPL build with libx264 + libass; sources linked from
+THIRD_PARTY_LICENSES.md) under `/opt/mycut/bin` (.deb) or the AppImage's
+`usr/bin`. The launcher points `MYCUT_FFMPEG` / `MYCUT_FFPROBE` (engine
+sidecar overrides, already supported) at the bundled copies. Users can set
+`MYCUT_USE_SYSTEM_FFMPEG=1` to prefer a system install instead. The
+runtime `doctor` diagnostic reports the tri-state: **missing / too old /
+ok**, with the minimum required version (4.3, for `xfade`) and an
+actionable message in every failure path.
+
+**Why.** Ubuntu 20.04's system FFmpeg is 4.2 — missing `xfade` (4.3+),
+which the transitions feature requires; declaring `Depends: ffmpeg` alone
+would produce a package that installs but cannot run transitions on 20.04.
+Bundling guarantees feature parity on every supported distro and is fully
+reproducible (pinned version + SHA256 in `build/fetch-ffmpeg.sh`).
+
+**Rejected.** System-FFmpeg-only (silent feature gap on 20.04); compiling
+FFmpeg from source at build time (slow, non-reproducible); shared-library
+extraction of the 20.04 .deb (drags ~40 transitive libs into the bundle).

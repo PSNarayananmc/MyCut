@@ -139,8 +139,8 @@ pub fn analyze(
 
     if let Some(hit) = cache.get::<Analysis>(&key) {
         if let Some(p) = progress {
-        p("cache", 100);
-    }
+            p("cache", 100);
+        }
         return Ok(hit);
     }
 

@@ -110,7 +110,7 @@ impl RenderEngine {
             let source = project
                 .source(&source_id)
                 .ok_or_else(|| EngineError::Tool(format!("missing source {source_id}")))?;
-            let media = crate::pathing::resolve_in_project(project_dir, &source.rel_path)?;
+            let media = crate::pathing::resolve_media(project_dir, &source.rel_path)?;
             args.push("-ss".into());
             args.push(fmt_secs(src_in));
             args.push("-t".into());
@@ -184,7 +184,7 @@ impl RenderEngine {
             let source = project
                 .source(&source_id)
                 .ok_or_else(|| EngineError::Tool(format!("missing source {source_id}")))?;
-            let media = crate::pathing::resolve_in_project(project_dir, &source.rel_path)?;
+            let media = crate::pathing::resolve_media(project_dir, &source.rel_path)?;
             args.push("-i".into());
             args.push(media.to_string_lossy().into_owned());
         }
@@ -193,7 +193,10 @@ impl RenderEngine {
         let n = video_items.len();
         let transitions = transition_slots(project, n);
         let any_xfade = transitions.iter().any(|slot| slot.map(|t| t.1).is_some());
-        let all_xfade = n > 1 && transitions.iter().all(|slot| matches!(slot, Some((_, Some(_)))));
+        let all_xfade = n > 1
+            && transitions
+                .iter()
+                .all(|slot| matches!(slot, Some((_, Some(_)))));
         let composed_label = "vcomp";
         let video_graph: String = if n == 1 {
             format!("[v0]format=yuv420p[{composed_label}];")
