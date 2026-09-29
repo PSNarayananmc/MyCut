@@ -85,6 +85,20 @@ pub enum Command {
     RemoveMarker {
         time_ms: TimeMs,
     },
+    AddEffect {
+        item_id: String,
+        effect: crate::model::EffectInstance,
+    },
+    RemoveEffect {
+        item_id: String,
+        effect_id: String,
+    },
+    SetTransitions {
+        transitions: Vec<crate::model::TransitionSetting>,
+    },
+    SetAudioMaster {
+        new: crate::model::AudioMaster,
+    },
     /// Replace the whole captions item content (used by CaptionEngine).
     ReplaceCaptions {
         style: CaptionsStyle,
@@ -120,6 +134,10 @@ impl Command {
             Command::SetExport { .. } => "Export settings",
             Command::AddMarker { .. } => "Add marker",
             Command::RemoveMarker { .. } => "Remove marker",
+            Command::AddEffect { .. } => "Add effect",
+            Command::RemoveEffect { .. } => "Remove effect",
+            Command::SetTransitions { .. } => "Set transitions",
+            Command::SetAudioMaster { .. } => "Audio settings",
             Command::ReplaceCaptions { .. } => "Generate captions",
             Command::RemoveCaptions => "Remove captions",
             Command::RestoreCaptionsItem { .. } => "Restore captions",
@@ -388,6 +406,38 @@ impl Command {
                     .ok_or_else(|| CoreError::NotFound("marker".into()))?;
                 let m = p.markers.remove(pos);
                 Ok(Command::AddMarker { time_ms: m.time_ms, label: m.label })
+            }
+            Command::AddEffect { item_id, effect } => {
+                let item = p
+                    .find_item_mut(item_id)
+                    .ok_or_else(|| CoreError::NotFound(format!("item {item_id}")))?;
+                if item.effects.iter().any(|e| e.id == effect.id) {
+                    return Err(CoreError::Invalid("duplicate effect id".into()));
+                }
+                item.effects.push(effect.clone());
+                Ok(Command::RemoveEffect { item_id: item_id.clone(), effect_id: effect.id.clone() })
+            }
+            Command::RemoveEffect { item_id, effect_id } => {
+                let item = p
+                    .find_item_mut(item_id)
+                    .ok_or_else(|| CoreError::NotFound(format!("item {item_id}")))?;
+                let pos = item
+                    .effects
+                    .iter()
+                    .position(|e| e.id == *effect_id)
+                    .ok_or_else(|| CoreError::NotFound(format!("effect {effect_id}")))?;
+                let effect = item.effects.remove(pos);
+                Ok(Command::AddEffect { item_id: item_id.clone(), effect })
+            }
+            Command::SetTransitions { transitions } => {
+                let old = p.transitions.clone();
+                p.transitions = transitions.clone();
+                Ok(Command::SetTransitions { transitions: old })
+            }
+            Command::SetAudioMaster { new } => {
+                let old = p.audio.clone();
+                p.audio = new.clone();
+                Ok(Command::SetAudioMaster { new: old })
             }
             Command::ReplaceCaptions { style, scale, safe_area, entries_json } => {
                 let entries: Vec<crate::model::CaptionEntry> = serde_json::from_str(entries_json)
