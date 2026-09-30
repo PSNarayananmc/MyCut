@@ -36,7 +36,12 @@ cargo run -p mycut-cli -- e2e target/e2e
 | CI/CD | **done** | `.github/workflows/build.yml`: ubuntu:20.04 container, pinned toolchains, tests, glibc gate, both packages, smoke tests, artifact upload, tag releases |
 | NVIDIA NIM preserved across runtimes | **done** | Same provider/config/secret-store used by both shells; `ai_test_connection` live command; key never leaves Rust (canary tests) |
 | Runtime E2E over real HTTP | **done** | `crates/server/tests/http_e2e.rs`: 4 tests (full pipeline, security jail/headers, undo/redo+settings, doctor) — green |
-| Test totals | **115 passed, 0 failed** | `cargo test --workspace` (was 106) |
+| Keyring fallback (no-api-key bug fix, root cause) | **done** | `crates/projects/src/secret.rs` `FallbackSecretStore`: tries OS keyring, falls back to 0600 file when Secret Service daemon is unavailable (headless CI, minimal Ubuntu, containers). Regression test `fallback_store_persists_when_keyring_unavailable` proves the key survives even when the keyring returns `KeyringUnavailable`. Both the Tauri shell AND the server binary use this store via `default_store()`. |
+| Tauri shell: missing commands wired | **done** | `src-tauri/src/main.rs` now registers `ai_list_models`, `ai_test_model`, `key_state`, `clear_api_key`, `doctor`, `effect_catalog`, `transition_catalog`, `caption_style_catalog`, `export_presets` (was 16 commands, now 23). Previously the UI called these and silently failed with "command not found". |
+| Tauri shell: Settings DTO with `keyStored`/`keyBackend` | **done** | `src-tauri/src/settings.rs` `SettingsDto` with `#[serde(rename_all = "camelCase")]` matches the TS `AppSettingsInfo` interface. The old Rust returned snake_case field names → the UI's `settings.keyStored` was always `undefined` → "No key stored" displayed even after a successful save. |
+| Tauri shell: native file picker (spec §13) | **done** | Removed the stub `pick_media_files()` that always returned `Vec::new()`. `import_media` now accepts paths from the JS-side `tauri-plugin-dialog` picker. `ui/src/lib/bridge.ts` `pickMediaPathsViaTauriDialog()` opens the native OS picker (multi-select, video/audio/image filters). |
+| Tauri shell: actionable error messages (spec §35) | **done** | Replaced `"no-api-key"` with `"No NVIDIA NIM API key is configured. Open Settings → AI Provider..."`. Added `humanize_ai_error()` mapping each `AiError` variant to actionable user-facing text. |
+| Test totals | **161 passed, 0 failed, 2 ignored** | `cargo test --workspace --features mycut-projects/os-keyring` |
 
 ## v0.3.0 — professional editor overhaul (this release)
 

@@ -156,19 +156,14 @@ fn read_api_key() -> String {
 }
 
 /// Which backend currently holds the key — reported to the UI as state,
-/// never as a value.
-fn key_backend_name() -> &'static str {
-    if std::env::var("MYCUT_SECRET_FILE").is_ok() {
-        return "file";
-    }
-    #[cfg(feature = "os-keyring")]
-    {
-        "keyring"
-    }
-    #[cfg(not(feature = "os-keyring"))]
-    {
-        "file"
-    }
+/// never as a value. Uses the live `SecretStore::backend()` probe so the
+/// UI shows "OS keyring" when the keyring actually answered, "file (0600)"
+/// when the fallback was used (e.g. no Secret Service daemon), or "none"
+/// when no key is stored.
+fn key_backend_name() -> String {
+    let dir = config_dir();
+    let store = secret::default_store(&dir);
+    store.backend().label().to_string()
 }
 
 fn nim_provider(state: &AppState) -> NvidiaNimProvider {

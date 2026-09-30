@@ -5,8 +5,13 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+/// On-disk settings (snake_case JSON for stability across versions).
+/// The Tauri command `get_settings` returns a separate DTO (`SettingsDto`)
+/// that adds runtime-only fields like `key_stored` / `key_backend` and
+/// uses camelCase field names matching the TypeScript `AppSettingsInfo`
+/// interface in `ui/src/lib/bridge.ts`. The two MUST stay in sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "snake_case")]
 pub struct AppSettings {
     pub base_url: String,
     pub model: String,
@@ -24,6 +29,37 @@ impl Default for AppSettings {
             // Low profile is the default for the 8 GB iGPU target machine.
             profile: "low".into(),
             cache_limit_bytes: 10 * 1024 * 1024 * 1024 / 2, // 5 GB
+        }
+    }
+}
+
+/// Runtime DTO shipped to the webview. Adds the key-state fields the UI needs
+/// to render "✓ Key stored (OS keyring)" vs "No key stored" without ever
+/// exposing the key itself.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsDto {
+    pub base_url: String,
+    pub model: String,
+    pub frames_enabled: bool,
+    pub profile: String,
+    pub cache_limit_bytes: u64,
+    pub key_stored: bool,
+    pub key_backend: String,
+}
+
+impl SettingsDto {
+    /// Build the DTO from on-disk settings + a live probe of the secret store.
+    #[must_use]
+    pub fn from_settings(s: &AppSettings, key_stored: bool, key_backend: &str) -> Self {
+        Self {
+            base_url: s.base_url.clone(),
+            model: s.model.clone(),
+            frames_enabled: s.frames_enabled,
+            profile: s.profile.clone(),
+            cache_limit_bytes: s.cache_limit_bytes,
+            key_stored,
+            key_backend: key_backend.to_string(),
         }
     }
 }
@@ -53,10 +89,13 @@ impl AppSettings {
     /// Apply one key/value from the settings UI.
     pub fn apply(&mut self, key: &str, value: &str) {
         match key {
-            "base_url" => self.base_url = value.to_string(),
+            "base_url" | "baseUrl" => self.base_url = value.to_string(),
             "model" => self.model = value.to_string(),
             "profile" => self.profile = value.to_string(),
-            "cache_limit_bytes" => {
+            "frames_enabled" | "framesEnabled" => {
+                self.frames_enabled = matches!(value.to_lowercase().as_str(), "true" | "1" | "yes" | "on");
+            }
+            "cache_limit_bytes" | "cacheLimitBytes" => {
                 if let Ok(v) = value.parse() {
                     self.cache_limit_bytes = v;
                 }

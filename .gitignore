@@ -25,6 +25,13 @@ target-appimage/
 *.local
 *.key
 NVIDIA_NIM_API_KEY*
+# File-backed secret store fallback (FileSecretStore / FallbackSecretStore)
+# Written to ~/.config/mycut/secret.nvapi when the OS keyring is unavailable.
+# Belt-and-suspenders in case someone copies their config dir into the repo.
+secret.nvapi
+**/mycut/secret.nvapi
+*.nvapi
 
 # Test / benchmark evidence (reproducible on demand)
 target/e2e/
+src-tauri/target/

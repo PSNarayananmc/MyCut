@@ -236,13 +236,21 @@ export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Pr
  * Upload one picked/dropped File through the streaming route. Returns the
  * created source id. Progress events are per-file start/end only (the
  * browser does not give us byte-level progress for fetch bodies).
+ *
+ * Note: this only works for the SERVER backend (browser → HTTP upload).
+ * Under Tauri, the webview cannot turn a File object back into a path,
+ * so the MediaPanel uses `pickMediaPathsViaTauriDialog()` + `importMedia`
+ * instead of this function.
  */
 export async function uploadFile(file: File): Promise<{ source: SourceInfo }> {
   const kind = backendKind();
   if (kind === "tauri") {
-    // The Tauri shell opens the native dialog in Rust and imports by path.
-    await invoke("import_media", { paths: [] });
-    return { source: { id: "", name: file.name } as SourceInfo };
+    // Should never be called under Tauri — MediaPanel routes through the
+    // dialog-plugin path. If we end up here anyway, surface an honest error
+    // instead of silently dropping the file (spec §34: no fake functionality).
+    throw new Error(
+      "Under the Tauri shell, file uploads must go through the native picker (use pickMediaPathsViaTauriDialog).",
+    );
   }
   const resp = await fetch(`api/import_upload?name=${encodeURIComponent(file.name)}`, {
     method: "POST",
@@ -260,12 +268,54 @@ export async function uploadFile(file: File): Promise<{ source: SourceInfo }> {
   return { source: payload.source! };
 }
 
+/** Media file extensions accepted by the picker (spec §13). */
+const MEDIA_EXTS = [
+  "mp4", "mov", "mkv", "webm", "avi", "m4v",
+  "mp3", "wav", "ogg", "flac", "aac", "m4a",
+  "png", "jpg", "jpeg", "webp",
+];
+
+/**
+ * Open the native OS file picker via `tauri-plugin-dialog` and return the
+ * picked paths. Returns an empty array if the user cancelled or the dialog
+ * plugin isn't available. The dialog plugin is injected on `window.__TAURI_INTERNALS__`
+ * by `tauri-plugin-dialog` (already a Rust-side dependency in src-tauri/Cargo.toml)
+ * — no extra npm package needed.
+ *
+ * Spec §13: native file picker, multi-select, video/audio/image filters.
+ */
+export async function pickMediaPathsViaTauriDialog(): Promise<string[]> {
+  const w = window as unknown as {
+    __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> };
+  };
+  if (!w.__TAURI_INTERNALS__?.invoke) {
+    throw new Error("Tauri dialog plugin is not available in this build.");
+  }
+  try {
+    const result = await w.__TAURI_INTERNALS__.invoke("plugin:dialog|open", {
+      multiple: true,
+      directory: false,
+      filters: [{ name: "Media", extensions: MEDIA_EXTS }],
+    });
+    // Tauri 2 dialog plugin returns `string | string[] | null` depending on `multiple`.
+    if (result == null) return [];
+    if (Array.isArray(result)) return result.filter((p): p is string => typeof p === "string");
+    if (typeof result === "string") return [result];
+    return [];
+  } catch (e) {
+    // The plugin isn't installed or the user dismissed the dialog. Degrade
+    // gracefully: return empty so the UI doesn't crash.
+    console.warn("Tauri dialog failed:", e);
+    return [];
+  }
+}
+
 // ---- typed commands ----
 
 export const api = {
   invoke,
   projectSnapshot: () => invoke<ProjectSnapshot>("project_snapshot"),
-  importMedia: (paths: string[]) => invoke<{ ok: boolean }>("import_media", { paths }),
+  importMedia: (paths: string[]) => invoke<{ imported: number; skipped: { path: string; reason: string }[] }>("import_media", { paths }),
   applyAiRequest: (request: string) => invoke<AiDiff>("ai_apply_request", { request }),
   undo: () => invoke<string>("undo"),
   redo: () => invoke<string>("redo"),
@@ -282,7 +332,7 @@ export const api = {
 
   // keys + provider
   setApiKey: (key: string) => invoke<{ ok: boolean; backend: string }>("set_api_key", { key }),
-  clearApiKey: () => invoke<{ ok: boolean }>("clear_api_key"),
+  clearApiKey: () => invoke<{ ok: boolean; backend: string }>("clear_api_key"),
   keyState: () => invoke<{ stored: boolean; backend: string }>("key_state"),
   getSettings: () => invoke<AppSettingsInfo>("get_settings"),
   setSetting: (key: string, value: string | boolean) => invoke<void>("set_setting", { key, value }),

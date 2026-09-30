@@ -42,7 +42,9 @@ const AIPanel: React.FC<{
       const msg = errMsg(e);
       let text = msg;
       if (msg.includes("backend-unavailable")) text = `${t.chat.offlineTitle}: ${t.chat.offlineNoKey}`;
-      if (msg.toLowerCase().includes("no nvidia nim api key")) {
+      // Match the actionable text returned by both the Tauri shell and the
+      // server crate — case-insensitive so future copy tweaks don't break it.
+      if (/no.*nvidia nim api key/i.test(msg) || msg.toLowerCase().includes("no-api-key")) {
         text = `${t.errors.noKeyTitle}. ${t.errors.noKeyBody}`;
       }
       setTurns((prev) => {

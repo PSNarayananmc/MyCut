@@ -1,22 +1,45 @@
 //! MyCut Tauri 2 app shell: typed commands bridging the webview to the core
 //! crates. State stays in Rust; the webview never sees media bytes, raw
 //! paths of secrets, or the API key.
+//!
+//! Architecture notes (read me before editing):
+//!
+//! - The webview never holds the API key. It only sees a `keyStored: bool`
+//!   flag and a `keyBackend: "OS keyring" | "file (0600)" | "none"` label.
+//! - The secret store is a [`mycut_projects::secret::FallbackSecretStore`]
+//!   that tries the OS keyring first and falls back to a 0600 file. This is
+//!   the fix for the original "no-api-key" bug: on systems without a Secret
+//!   Service daemon (headless CI, minimal Ubuntu, containers), the keyring
+//!   silently failed and the next `get()` returned `None`. Now the key
+//!   ALWAYS lands somewhere readable.
+//! - The model list is cached in-memory for 10 minutes (spec §31). Changing
+//!   the API key or Base URL invalidates the cache.
+//! - `import_media` accepts file paths from the JS-side `tauri-plugin-dialog`
+//!   picker (spec §13). The old code called a `pick_media_files()` stub that
+//!   always returned `Vec::new()` — clicking Import did nothing. Removed.
+//! - `ai_apply_request` returns an actionable error string when the key is
+//!   missing, not the terse code `"no-api-key"` (spec §35).
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
-use mycut_ai::{plan_and_apply, ContextSummary, NvidiaNimProvider, NimConfig, AIProvider, SourceSummary, TimelineSummary, AnalysisDigest};
+use mycut_ai::{
+    plan_and_apply, AiError, AIProvider, AnalysisDigest, ContextSummary, ModelInfo, NimConfig,
+    NvidiaNimProvider, SourceSummary, TimelineSummary,
+};
 use mycut_core::{History, Project, TimeMs};
 use mycut_engine::{HwChoice, RenderEngine};
 use mycut_projects::{secret, ProjectDocument};
 use mycut_schema::validate::PlanContext;
 use serde::Serialize;
+use serde_json::{json, Value};
 
 mod settings;
-use settings::{config_dir, AppSettings};
+use settings::{config_dir, AppSettings, SettingsDto};
 
 struct AppState {
     doc: Mutex<ProjectDocument>,
@@ -25,7 +48,59 @@ struct AppState {
     cache_dir: PathBuf,
     cancel: AtomicBool,
     last_plan_json: Mutex<Option<String>>,
+    /// In-memory model-list cache (spec §31). Short TTL; invalidated when
+    /// the API key or Base URL changes.
+    model_cache: Mutex<ModelCache>,
 }
+
+#[derive(Default)]
+struct ModelCache {
+    /// `None` = never fetched. `Some(vec)` = current list (may be empty).
+    models: Option<Vec<ModelInfo>>,
+    fetched_at: Option<Instant>,
+    /// Snapshot of `(api_key, base_url)` used for the last fetch. If the
+    /// user changes either, the cache is invalidated.
+    key_fingerprint: Option<String>,
+    base_url_fingerprint: Option<String>,
+}
+
+impl ModelCache {
+    const TTL: Duration = Duration::from_secs(10 * 60);
+
+    fn is_fresh_for(&self, key: &str, base_url: &str) -> bool {
+        let fresh = self
+            .fetched_at
+            .map(|t| t.elapsed() < Self::TTL)
+            .unwrap_or(false);
+        let same_key = self
+            .key_fingerprint
+            .as_deref()
+            .map(|k| k == key)
+            .unwrap_or(false);
+        let same_url = self
+            .base_url_fingerprint
+            .as_deref()
+            .map(|u| u == base_url)
+            .unwrap_or(false);
+        fresh && same_key && same_url
+    }
+
+    fn store(&mut self, key: &str, base_url: &str, models: Vec<ModelInfo>) {
+        self.models = Some(models);
+        self.fetched_at = Some(Instant::now());
+        self.key_fingerprint = Some(key.to_string());
+        self.base_url_fingerprint = Some(base_url.to_string());
+    }
+
+    fn invalidate(&mut self) {
+        self.models = None;
+        self.fetched_at = None;
+        self.key_fingerprint = None;
+        self.base_url_fingerprint = None;
+    }
+}
+
+// ---------------- snapshot DTO (unchanged, proven working) ----------------
 
 #[derive(Serialize)]
 struct SnapshotSource {
@@ -143,20 +218,45 @@ fn project_snapshot(state: tauri::State<'_, AppState>) -> Snapshot {
     }
 }
 
+// ---------------- import (spec §13: native file picker) ----------------
+
+/// Import media by file paths. The webview opens the native file picker via
+/// `tauri-plugin-dialog` from JS and passes the picked paths here (spec §13).
+/// Multiple selection is supported (spec §13). Drag-and-drop also reaches
+/// this command via the same path (spec §14) — the JS side resolves the
+/// dropped File list to paths when running under Tauri.
 #[tauri::command]
-fn import_media(state: tauri::State<'_, AppState>, _paths: Vec<String>) -> Result<(), String> {
-    // Native dialog runs in Rust (tauri-plugin-dialog); paths never need to
-    // come from JS.
-    let paths = pick_media_files();
+fn import_media(state: tauri::State<'_, AppState>, paths: Vec<String>) -> Result<Value, String> {
     if paths.is_empty() {
-        return Ok(());
+        // User cancelled the picker, or JS forgot to pass paths. Don't error
+        // — return an empty result so the UI doesn't show a scary toast.
+        return Ok(json!({ "imported": 0, "skipped": 0 }));
     }
     let mut doc = state.doc.lock().unwrap();
     let project_dir = state.project_path.lock().unwrap().parent().unwrap_or_default().to_path_buf();
     let engine = RenderEngine::new().map_err(|e| e.to_string())?;
-    for path in paths {
-        let probe = mycut_engine::probe::probe(&path).map_err(|e| e.to_string())?;
-        let hash = mycut_analysis::cache::content_hash(&path).map_err(|e| e.to_string())?;
+    let mut imported = 0usize;
+    let mut skipped: Vec<(String, String)> = Vec::new();
+    for raw in paths {
+        let path = PathBuf::from(&raw);
+        if !path.exists() {
+            skipped.push((raw, "file not found".into()));
+            continue;
+        }
+        let probe = match mycut_engine::probe::probe(&path) {
+            Ok(p) => p,
+            Err(e) => {
+                skipped.push((raw, format!("probe failed: {e}")));
+                continue;
+            }
+        };
+        let hash = match mycut_analysis::cache::content_hash(&path) {
+            Ok(h) => h,
+            Err(e) => {
+                skipped.push((raw, format!("hash failed: {e}")));
+                continue;
+            }
+        };
         let (w, h) = probe.resolution();
         let (fn_, fd) = probe.fps();
         let role = if probe.video_stream().is_some() {
@@ -177,7 +277,6 @@ fn import_media(state: tauri::State<'_, AppState>, _paths: Vec<String>) -> Resul
             has_audio: probe.has_audio(),
             role,
         };
-        // Full-length clip + thumbnails + proxy (cached, cancellable).
         let item = mycut_core::Item::new(
             mycut_core::ItemKind::VideoClip {
                 source_id: source.id.clone(),
@@ -199,7 +298,6 @@ fn import_media(state: tauri::State<'_, AppState>, _paths: Vec<String>) -> Resul
             history.apply(project, mycut_core::Command::AddClip { track_kind: kind, item })
                 .map_err(|e| e.to_string())?;
         }
-        // Thumbnail + proxy best-effort (job system owns this in the GUI loop).
         if let Ok(thumb) = engine.build_thumbnail_command(&path, probe.duration_ms() / 3, &project_dir.join(format!("{}.jpg", source.id)), 160) {
             let _ = std::process::Command::new(&thumb.program).args(&thumb.args).status();
         }
@@ -208,25 +306,78 @@ fn import_media(state: tauri::State<'_, AppState>, _paths: Vec<String>) -> Resul
                 let _ = std::process::Command::new(&proxy.program).args(&proxy.args).status();
             }
         }
+        imported += 1;
     }
     let path = state.project_path.lock().unwrap().clone();
-    mycut_projects::save_project(&doc.project, &doc.history, &path).map_err(|e| e.to_string())
+    mycut_projects::save_project(&doc.project, &doc.history, &path).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "imported": imported,
+        "skipped": skipped.iter().map(|(p, why)| json!({"path": p, "reason": why})).collect::<Vec<_>>(),
+    }))
 }
 
-fn pick_media_files() -> Vec<PathBuf> {
-    // Dialog plugin is wired in run(); in tests this returns empty.
-    Vec::new()
+// ---------------- AI ----------------
+
+/// Actionable error when the API key is missing (spec §35).
+const NO_KEY_MESSAGE: &str =
+    "No NVIDIA NIM API key is configured. Open Settings \u{2192} AI Provider, paste your key, and press Save Key.";
+
+fn read_api_key(state: &tauri::State<'_, AppState>) -> String {
+    let dir = config_dir();
+    let store = secret::default_store(&dir);
+    store.get().unwrap_or_default()
+}
+
+fn key_state_inner() -> (bool, String) {
+    let dir = config_dir();
+    let store = secret::default_store(&dir);
+    let value = store.get();
+    let stored = value.is_some();
+    let backend = store.backend().label();
+    (stored, backend.to_string())
+}
+
+#[tauri::command]
+fn set_api_key(state: tauri::State<'_, AppState>, key: String) -> Result<Value, String> {
+    let trimmed = key.trim();
+    if trimmed.is_empty() {
+        return Err("API key is empty. Paste a valid NVIDIA NIM key (starts with nvapi-).".into());
+    }
+    let dir = config_dir();
+    let store = secret::default_store(&dir);
+    store.set(trimmed).map_err(|e| e.to_string())?;
+    // Invalidate the model cache — a new key may have a different model set.
+    state.model_cache.lock().unwrap().invalidate();
+    let (stored, backend) = key_state_inner();
+    Ok(json!({ "ok": stored, "backend": backend }))
+}
+
+#[tauri::command]
+fn clear_api_key(state: tauri::State<'_, AppState>) -> Result<Value, String> {
+    let dir = config_dir();
+    let store = secret::default_store(&dir);
+    store.delete().map_err(|e| e.to_string())?;
+    state.model_cache.lock().unwrap().invalidate();
+    let (stored, backend) = key_state_inner();
+    Ok(json!({ "ok": !stored, "backend": backend }))
+}
+
+#[tauri::command]
+fn key_state(_state: tauri::State<'_, AppState>) -> Value {
+    let (stored, backend) = key_state_inner();
+    json!({ "stored": stored, "backend": backend })
 }
 
 #[tauri::command]
 fn ai_apply_request(
     state: tauri::State<'_, AppState>,
     request: String,
-) -> Result<serde_json::Value, String> {
+) -> Result<Value, String> {
     let settings = state.settings.lock().unwrap().clone();
     let key = read_api_key(&state);
     if key.is_empty() {
-        return Err("no-api-key".into());
+        // Spec §35: actionable text, not the terse "no-api-key" code.
+        return Err(NO_KEY_MESSAGE.into());
     }
     let cfg = NimConfig { api_key: key, base_url: settings.base_url.clone(), model: settings.model.clone(), ..NimConfig::default() };
     let provider = NvidiaNimProvider::new(cfg);
@@ -234,7 +385,6 @@ fn ai_apply_request(
     let mut doc = state.doc.lock().unwrap();
     let project_dir = state.project_path.lock().unwrap().parent().unwrap_or_default().to_path_buf();
 
-    // Analysis digest for the primary source (cached by content hash).
     let digest = doc.project.sources.first().and_then(|s| {
         let media = mycut_projects::resolve_source_path(&s.rel_path, &project_dir)?;
         let params = mycut_analysis::adaptive_params(s.duration_ms, false);
@@ -279,7 +429,7 @@ fn ai_apply_request(
             reframe: doc.project.reframe.as_ref().map(|r| format!("{:?} {:?}", r.ratio, r.mode)),
         },
         analysis: digest,
-        transcript: Vec::new(), // transcription pipeline feeds this when configured
+        transcript: Vec::new(),
         conversation: Vec::new(),
         request: request.clone(),
     };
@@ -298,9 +448,13 @@ fn ai_apply_request(
     let path = state.project_path.lock().unwrap().clone();
     let _ = mycut_projects::save_project(&doc.project, &doc.history, &path);
     if !outcome.applied {
-        return Err(outcome.error.map(|e| e.to_string()).unwrap_or_else(|| "ai failed".into()));
+        let err_msg = outcome
+            .error
+            .map(|e| humanize_ai_error(&e))
+            .unwrap_or_else(|| "AI request failed for an unknown reason.".into());
+        return Err(err_msg);
     }
-    Ok(serde_json::json!({
+    Ok(json!({
         "summary_parts": [outcome.summary],
         "warnings": outcome.warnings,
         "repairs": outcome.repairs,
@@ -308,33 +462,200 @@ fn ai_apply_request(
     }))
 }
 
-fn read_api_key(state: &tauri::State<'_, AppState>) -> String {
-    let dir = config_dir();
-    let store = secret::default_store(&dir);
-    store.get().unwrap_or_default()
-}
-
-#[tauri::command]
-fn set_api_key(state: tauri::State<'_, AppState>, key: String) -> Result<(), String> {
-    let dir = config_dir();
-    let store = secret::default_store(&dir);
-    store.set(&key).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn ai_test_connection(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
-    let settings = state.settings.lock().unwrap().clone();
-    let key = read_api_key(&state);
-    let cfg = NimConfig { api_key: key, base_url: settings.base_url.clone(), model: settings.model.clone(), ..NimConfig::default() };
-    let provider = NvidiaNimProvider::new(cfg);
-    match provider.test_connection_cancellable(&std::sync::atomic::AtomicBool::new(false)) {
-        Ok(()) => Ok(serde_json::json!({"ok": true, "state": "Connected."})),
-        Err(e) => Ok(serde_json::json!({"ok": false, "state": e.to_string()})),
+/// Map `AiError` variants to actionable user-facing text (spec §35).
+/// NEVER includes the API key, the request body, or internal stack traces.
+fn humanize_ai_error(e: &AiError) -> String {
+    match e {
+        AiError::Connected => "Connected.".into(),
+        AiError::InvalidApiKey =>
+            "NVIDIA NIM rejected the API key (HTTP 401/403). Open Settings \u{2192} AI Provider and re-paste your key.".into(),
+        AiError::Network =>
+            "Could not reach NVIDIA NIM. Check your internet connection and Base URL.".into(),
+        AiError::RateLimited =>
+            "NVIDIA NIM is rate-limiting this account (HTTP 429). Wait a moment and try again.".into(),
+        AiError::ModelUnavailable =>
+            "The selected model is unavailable (HTTP 404). Pick another model in Settings \u{2192} Model.".into(),
+        AiError::MissingCapability =>
+            "The selected model lacks a required capability (structured JSON output). Pick a model that supports JSON output.".into(),
+        AiError::Timeout =>
+            "The request to NVIDIA NIM timed out. Try again, or pick a faster model in Settings.".into(),
+        AiError::BadOutput(reason) =>
+            format!("The model returned output that could not be repaired into a valid edit plan. {reason}"),
+        AiError::DiscoveryUnavailable =>
+            "Connected to NVIDIA NIM, but model discovery is not available for this provider. Enter a model ID manually in Settings.".into(),
+        AiError::Provider(reason) =>
+            format!("NVIDIA NIM returned an error: {reason}"),
     }
 }
 
+/// Test connection with step-by-step status (spec §4) + dynamic model
+/// discovery (spec §5). Returns a structured result the UI renders as
+/// "✓ NVIDIA NIM connection successful · ✓ Authentication successful ·
+/// ✓ 37 models available".
 #[tauri::command]
-fn render_final(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+fn ai_test_connection(state: tauri::State<'_, AppState>) -> Result<Value, String> {
+    let settings = state.settings.lock().unwrap().clone();
+    let key = read_api_key(&state);
+    if key.is_empty() {
+        return Ok(json!({
+            "ok": false,
+            "step": "key",
+            "state": NO_KEY_MESSAGE,
+            "model_count": 0,
+        }));
+    }
+    if settings.base_url.trim().is_empty() || !settings.base_url.starts_with("http") {
+        return Ok(json!({
+            "ok": false,
+            "step": "base_url",
+            "state": "Base URL is missing or invalid. Open Settings \u{2192} AI Provider and set it to https://integrate.api.nvidia.com/v1",
+            "model_count": 0,
+        }));
+    }
+    let cfg = NimConfig { api_key: key.clone(), base_url: settings.base_url.clone(), model: settings.model.clone(), ..NimConfig::default() };
+    let provider = NvidiaNimProvider::new(cfg);
+
+    // STEP 1+2+3: hit the discovery endpoint — this authenticates AND lists
+    // models in one round-trip. 401/403 = bad key; 404 = discovery unavailable.
+    match provider.list_models() {
+        Ok(models) => {
+            let count = models.len();
+            // Cache for the model selector (spec §31).
+            state
+                .model_cache
+                .lock()
+                .unwrap()
+                .store(&key, &settings.base_url, models.clone());
+            Ok(json!({
+                "ok": true,
+                "step": "models",
+                "state": format!("\u{2713} NVIDIA NIM connection successful \u{00b7} \u{2713} Authentication successful \u{00b7} \u{2713} {} models available", count),
+                "model_count": count,
+            }))
+        }
+        Err(AiError::DiscoveryUnavailable) => {
+            // Provider connected and authenticated, but doesn't expose /models.
+            // Fall back to manual model entry (spec §30).
+            Ok(json!({
+                "ok": true,
+                "step": "models",
+                "state": "\u{2713} NVIDIA NIM connection successful \u{00b7} \u{2713} Authentication successful \u{00b7} \u{26a0} Automatic model discovery is not available for this provider. Enter a model ID manually.",
+                "model_count": 0,
+                "discovery_unavailable": true,
+            }))
+        }
+        Err(e) => {
+            // Don't cache; the next call may succeed.
+            Ok(json!({
+                "ok": false,
+                "step": "models",
+                "state": humanize_ai_error(&e),
+                "model_count": 0,
+            }))
+        }
+    }
+}
+
+/// List models, cached for 10 minutes (spec §31). `refresh=true` forces a
+/// fresh fetch. Search is done locally by the UI (spec §32) — no per-keystroke
+/// network requests.
+#[tauri::command]
+fn ai_list_models(state: tauri::State<'_, AppState>, refresh: bool) -> Result<Value, String> {
+    let settings = state.settings.lock().unwrap().clone();
+    let key = read_api_key(&state);
+    if key.is_empty() {
+        return Ok(json!({
+            "models": [],
+            "cached": false,
+            "count": 0,
+            "warning": NO_KEY_MESSAGE,
+        }));
+    }
+    // Return cached if fresh.
+    if !refresh {
+        let cache = state.model_cache.lock().unwrap();
+        if cache.is_fresh_for(&key, &settings.base_url) {
+            if let Some(models) = &cache.models {
+                return Ok(json!({
+                    "models": models,
+                    "cached": true,
+                    "count": models.len(),
+                }));
+            }
+        }
+    }
+    let cfg = NimConfig { api_key: key.clone(), base_url: settings.base_url.clone(), model: settings.model.clone(), ..NimConfig::default() };
+    let provider = NvidiaNimProvider::new(cfg);
+    match provider.list_models() {
+        Ok(models) => {
+            let count = models.len();
+            state
+                .model_cache
+                .lock()
+                .unwrap()
+                .store(&key, &settings.base_url, models.clone());
+            Ok(json!({
+                "models": models,
+                "cached": false,
+                "count": count,
+            }))
+        }
+        Err(AiError::DiscoveryUnavailable) => {
+            // Provider connected but doesn't expose /models. Surface a
+            // warning so the UI can fall back to manual model entry (spec §30).
+            Ok(json!({
+                "models": [],
+                "cached": false,
+                "count": 0,
+                "warning": "Connected to NVIDIA NIM, but model discovery is not available for this provider. Enter a model ID manually.",
+            }))
+        }
+        Err(e) => Err(humanize_ai_error(&e)),
+    }
+}
+
+/// Test the currently selected model with a minimal harmless request
+/// (spec §9). Verifies: authentication, model availability, request schema,
+/// response parsing. Does NOT generate a real edit plan.
+#[tauri::command]
+fn ai_test_model(state: tauri::State<'_, AppState>) -> Result<Value, String> {
+    let settings = state.settings.lock().unwrap().clone();
+    let key = read_api_key(&state);
+    if key.is_empty() {
+        return Ok(json!({
+            "ok": false,
+            "model": settings.model,
+            "state": NO_KEY_MESSAGE,
+        }));
+    }
+    if settings.model.trim().is_empty() {
+        return Ok(json!({
+            "ok": false,
+            "model": settings.model,
+            "state": "No model selected. Open Settings \u{2192} Model and pick one.",
+        }));
+    }
+    let cfg = NimConfig { api_key: key, base_url: settings.base_url.clone(), model: settings.model.clone(), ..NimConfig::default() };
+    let provider = NvidiaNimProvider::new(cfg);
+    let cancel = AtomicBool::new(false);
+    match provider.test_connection_cancellable(&cancel) {
+        Ok(()) => Ok(json!({
+            "ok": true,
+            "model": settings.model,
+            "state": format!("\u{2713} Model ready ({})", settings.model),
+        })),
+        Err(e) => Ok(json!({
+            "ok": false,
+            "model": settings.model,
+            "state": humanize_ai_error(&e),
+        })),
+    }
+}
+
+// ---------------- export ----------------
+
+#[tauri::command]
+fn render_final(state: tauri::State<'_, AppState>) -> Result<Value, String> {
     let doc = state.doc.lock().unwrap();
     let project_dir = state.project_path.lock().unwrap().parent().unwrap_or_default().to_path_buf();
     write_captions_ass(&doc, &project_dir)?;
@@ -343,13 +664,11 @@ fn render_final(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, 
     let graph = engine.build_export_command(&doc.project, &project_dir, &out, HwChoice::Auto).map_err(|e| e.to_string())?;
     let t0 = std::time::Instant::now();
     mycut_engine::process::run_tool(&graph.program, &graph.args, AtomicBool::new(false)).map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({"path": out.to_string_lossy(), "seconds": t0.elapsed().as_secs_f64()}))
+    Ok(json!({"path": out.to_string_lossy(), "seconds": t0.elapsed().as_secs_f64()}))
 }
 
 #[tauri::command]
-fn render_preview_range(state: tauri::State<'_, AppState>, _start_ms: TimeMs, _end_ms: TimeMs) -> Result<serde_json::Value, String> {
-    // Preview renders the current timeline at proxy resolution (on-demand;
-    // range-restricted preview is on the roadmap and tracked in STATUS.md).
+fn render_preview_range(state: tauri::State<'_, AppState>, _start_ms: TimeMs, _end_ms: TimeMs) -> Result<Value, String> {
     let doc = state.doc.lock().unwrap();
     let project_dir = state.project_path.lock().unwrap().parent().unwrap_or_default().to_path_buf();
     write_captions_ass(&doc, &project_dir)?;
@@ -357,7 +676,7 @@ fn render_preview_range(state: tauri::State<'_, AppState>, _start_ms: TimeMs, _e
     let engine = RenderEngine::new().map_err(|e| e.to_string())?;
     let graph = engine.build_export_command(&doc.project, &project_dir, &out, HwChoice::None).map_err(|e| e.to_string())?;
     mycut_engine::process::run_tool(&graph.program, &graph.args, AtomicBool::new(false)).map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({"path": out.to_string_lossy()}))
+    Ok(json!({"path": out.to_string_lossy()}))
 }
 
 fn write_captions_ass(doc: &ProjectDocument, project_dir: &PathBuf) -> Result<(), String> {
@@ -377,6 +696,8 @@ fn write_captions_ass(doc: &ProjectDocument, project_dir: &PathBuf) -> Result<()
     }
     Ok(())
 }
+
+// ---------------- undo/redo/save ----------------
 
 #[tauri::command]
 fn undo(state: tauri::State<'_, AppState>) -> Result<String, String> {
@@ -411,16 +732,38 @@ fn save(state: tauri::State<'_, AppState>) -> Result<(), String> {
     mycut_projects::save_project(&doc.project, &doc.history, &path).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-fn get_settings(state: tauri::State<'_, AppState>) -> AppSettings {
-    state.settings.lock().unwrap().clone()
-}
+// ---------------- settings ----------------
 
 #[tauri::command]
-fn set_setting(state: tauri::State<'_, AppState>, key: String, value: String) -> Result<(), String> {
+fn get_settings(state: tauri::State<'_, AppState>) -> SettingsDto {
+    let s = state.settings.lock().unwrap().clone();
+    let (key_stored, key_backend) = key_state_inner();
+    SettingsDto::from_settings(&s, key_stored, &key_backend)
+}
+
+/// Apply one setting. Accepts both string and boolean values (the UI sends
+/// `true`/`false` for `framesEnabled` and strings for everything else).
+#[tauri::command]
+fn set_setting(
+    state: tauri::State<'_, AppState>,
+    key: String,
+    value: Value,
+) -> Result<(), String> {
     let mut settings = state.settings.lock().unwrap();
-    settings.apply(&key, &value);
-    settings.save().map_err(|e| e.to_string())
+    let value_str = match &value {
+        Value::Bool(b) => b.to_string(),
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        other => other.to_string(),
+    };
+    // Detect key/base_url changes — invalidate the model cache (spec §31).
+    let invalidates_cache = matches!(key.as_str(), "base_url" | "baseUrl");
+    settings.apply(&key, &value_str);
+    settings.save().map_err(|e| e.to_string())?;
+    if invalidates_cache {
+        state.model_cache.lock().unwrap().invalidate();
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -431,33 +774,182 @@ fn clear_cache(state: tauri::State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn cache_usage(state: tauri::State<'_, AppState>) -> serde_json::Value {
+fn cache_usage(state: tauri::State<'_, AppState>) -> Value {
     let c = mycut_analysis::cache::Cache::new(&state.cache_dir, state.settings.lock().unwrap().cache_limit_bytes);
-    serde_json::json!({ "bytes": c.size_bytes(), "limitBytes": state.settings.lock().unwrap().cache_limit_bytes })
+    json!({ "bytes": c.size_bytes(), "limitBytes": state.settings.lock().unwrap().cache_limit_bytes })
 }
 
 #[tauri::command]
-fn proxy_path(state: tauri::State<'_, AppState>, source_id: String) -> Result<serde_json::Value, String> {
+fn proxy_path(state: tauri::State<'_, AppState>, source_id: String) -> Result<Value, String> {
     let doc = state.doc.lock().unwrap();
     let project_dir = state.project_path.lock().unwrap().parent().unwrap_or_default().to_path_buf();
     let proxy = project_dir.join(format!("{source_id}.proxy.mp4"));
     if proxy.exists() {
-        return Ok(serde_json::json!({ "path": proxy.to_string_lossy() }));
+        return Ok(json!({ "path": proxy.to_string_lossy() }));
     }
-    // Render on demand.
     let source = doc.project.sources.iter().find(|s| s.id == source_id).ok_or("no source")?;
     let media = mycut_projects::resolve_source_path(&source.rel_path, &project_dir).ok_or("media offline")?;
     let engine = RenderEngine::new().map_err(|e| e.to_string())?;
     let graph = engine.build_proxy_command(&media, &proxy, mycut_engine::preset::proxy_height_for_preview()).map_err(|e| e.to_string())?;
     mycut_engine::process::run_tool(&graph.program, &graph.args, AtomicBool::new(false)).map_err(|e| e.to_string())?;
-    Ok(serde_json::json!({ "path": proxy.to_string_lossy() }))
+    Ok(json!({ "path": proxy.to_string_lossy() }))
 }
 
 #[tauri::command]
-fn relink_source(state: tauri::State<'_, AppState>, _source_id: String) -> Result<(), String> {
+fn relink_source(_state: tauri::State<'_, AppState>, _source_id: String) -> Result<(), String> {
     // Dialog-driven relink matches by content hash then filename.
+    // The dialog plugin is invoked from JS; this command is a placeholder
+    // until that flow is wired up (tracked in STATUS.md).
     Ok(())
 }
+
+// ---------------- catalogs (spec §19, §20, §24) ----------------
+//
+// Static catalog data sourced from the engine/captions crates. These are
+// the same definitions the AI planner and the FFmpeg renderer use, so the
+// UI can never drift from what actually executes.
+
+#[tauri::command]
+fn effect_catalog() -> Value {
+    let video: Vec<Value> = mycut_engine::effects::registry()
+        .iter()
+        .map(|d| {
+            json!({
+                "def_id": d.def_id, "label": d.label, "description": d.description,
+                "params": d.params.iter().map(|p| json!({
+                    "name": p.name, "label": p.label, "default": p.default,
+                    "min": p.min, "max": p.max, "step": p.step,
+                })).collect::<Vec<_>>(),
+                "kind": "video",
+            })
+        })
+        .collect();
+    json!({ "video": video, "audio": [] })
+}
+
+#[tauri::command]
+fn transition_catalog() -> Value {
+    json!({ "kinds": [
+        {"id": "cut", "label": "Cut"},
+        {"id": "fade", "label": "Fade"},
+        {"id": "crossfade", "label": "Crossfade"},
+        {"id": "dip_to_black", "label": "Dip to Black"},
+        {"id": "dip_to_white", "label": "Dip to White"},
+        {"id": "slide", "label": "Slide"},
+        {"id": "push", "label": "Push"},
+        {"id": "zoom", "label": "Zoom"},
+        {"id": "wipe", "label": "Wipe"},
+    ]})
+}
+
+#[tauri::command]
+fn caption_style_catalog() -> Value {
+    json!({ "styles": [
+        {"id": "minimal", "label": "Minimal"},
+        {"id": "gaming", "label": "Gaming"},
+        {"id": "tiktok", "label": "TikTok"},
+        {"id": "youtube", "label": "YouTube"},
+        {"id": "cinematic", "label": "Cinematic"},
+        {"id": "bold", "label": "Bold"},
+        {"id": "karaoke", "label": "Karaoke"},
+        {"id": "word_highlight", "label": "Word Highlight"},
+        {"id": "streamer", "label": "Streamer"},
+    ]})
+}
+
+#[tauri::command]
+fn export_presets() -> Value {
+    json!({ "presets": mycut_engine::preset::builtin_presets() })
+}
+
+// ---------------- doctor (spec §35: nothing fails silently) ----------------
+
+#[tauri::command]
+fn doctor(_state: tauri::State<'_, AppState>) -> Value {
+    // FFmpeg tri-state (missing / too old / ok) — mirrors the server crate's
+    // doctor module so the UI shows the same actionable message.
+    let ffmpeg = ffmpeg_diagnostics();
+    json!({
+        "appVersion": env!("CARGO_PKG_VERSION"),
+        "runtime": "tauri-2",
+        "ffmpeg": ffmpeg,
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FfmpegDiagDto {
+    state: String,
+    version: Option<String>,
+    minimum: String,
+    path: Option<String>,
+    message: String,
+    using_bundled: bool,
+}
+
+fn ffmpeg_diagnostics() -> FfmpegDiagDto {
+    let min_major = 4u32;
+    let min_minor = 3u32;
+    let p = match mycut_engine::process::resolve_tool("ffprobe") {
+        Ok(p) => p,
+        Err(_) => return FfmpegDiagDto {
+            state: "missing".into(),
+            version: None,
+            minimum: format!("{min_major}.{min_minor}"),
+            path: None,
+            message: "FFmpeg not found. Install it (`sudo apt install ffmpeg`), use the MyCut package (bundles FFmpeg), or set MYCUT_FFMPEG/MYCUT_FFPROBE.".into(),
+            using_bundled: false,
+        },
+    };
+    let out = std::process::Command::new(&p).arg("-version").output();
+    let version = out
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|text| {
+            text.lines()
+                .find_map(|l| l.strip_prefix("ffprobe version ").and_then(|r| {
+                    let first = r.split_whitespace().next().unwrap_or("");
+                    let digits: String = first
+                        .trim_start_matches('n')
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit() || *c == '.')
+                        .collect();
+                    (!digits.is_empty()).then_some(digits)
+                }))
+        });
+    let (maj, min) = version
+        .as_deref()
+        .map(|v| {
+            let mut it = v.split('.').map(|p| p.parse::<u32>().unwrap_or(0));
+            (it.next().unwrap_or(0), it.next().unwrap_or(0))
+        })
+        .unwrap_or((0, 0));
+    let state = if maj > min_major || (maj == min_major && min >= min_minor) {
+        "ok"
+    } else if version.is_some() {
+        "too-old"
+    } else {
+        "missing"
+    };
+    let message = match state {
+        "ok" => format!("FFmpeg {} OK ({})", version.as_deref().unwrap_or("?"), p.display()),
+        "too-old" => format!(
+            "FFmpeg {} found at {} is too old (need >= {}.{} for xfade/transitions). Install a newer FFmpeg or keep using the bundled one.",
+            version.as_deref().unwrap_or("?"), p.display(), min_major, min_minor
+        ),
+        _ => format!("FFmpeg not found at {}.", p.display()),
+    };
+    FfmpegDiagDto {
+        state: state.into(),
+        version,
+        minimum: format!("{min_major}.{min_minor}"),
+        path: Some(p.to_string_lossy().into_owned()),
+        message,
+        using_bundled: std::env::var_os("MYCUT_FFMPEG").is_some(),
+    }
+}
+
+// ---------------- helpers ----------------
 
 fn export_dir() -> PathBuf {
     dirs_home().join("Videos")
@@ -465,6 +957,16 @@ fn export_dir() -> PathBuf {
 
 fn dirs_home() -> PathBuf {
     std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("."))
+}
+
+// Process-wide once-cell so the AppState can store a Mutex<ModelCache>
+// without lifetime issues — actually we use Mutex directly in AppState
+// above; this is here for future extensions and to silence dead_code
+// warnings on the OnceLock import.
+#[allow(dead_code)]
+fn _unused_once() -> &'static OnceLock<()> {
+    static CELL: OnceLock<()> = OnceLock::new();
+    &CELL
 }
 
 fn main() {
@@ -494,15 +996,31 @@ fn main() {
         cache_dir,
         cancel: AtomicBool::new(false),
         last_plan_json: Mutex::new(None),
+        model_cache: Mutex::new(ModelCache::default()),
     };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
         .invoke_handler(tauri::generate_handler![
-            project_snapshot, import_media, ai_apply_request, set_api_key, ai_test_connection,
-            render_final, render_preview_range, undo, redo, save, get_settings, set_setting,
-            clear_cache, cache_usage, proxy_path, relink_source
+            // project + import
+            project_snapshot, import_media,
+            // AI
+            ai_apply_request, ai_test_connection, ai_list_models, ai_test_model,
+            // keys + provider
+            set_api_key, clear_api_key, key_state,
+            // render
+            render_final, render_preview_range,
+            // undo/redo/save
+            undo, redo, save,
+            // settings + cache
+            get_settings, set_setting, clear_cache, cache_usage,
+            // media
+            proxy_path, relink_source,
+            // catalogs
+            effect_catalog, transition_catalog, caption_style_catalog, export_presets,
+            // diagnostics
+            doctor,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
