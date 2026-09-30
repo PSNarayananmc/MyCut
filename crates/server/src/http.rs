@@ -21,10 +21,14 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::assets;
+use crate::edit;
 use crate::state::{self, AppState, CommandError};
 
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 const MAX_BODY_BYTES: usize = 10 * 1024 * 1024;
+/// Uploads bypass the in-memory body cap and stream straight to disk.
+const MAX_UPLOAD_BYTES: u64 = 8 * 1024 * 1024 * 1024; // 8 GiB
+const UPLOAD_CHUNK: usize = 1024 * 1024;
 const MAX_CONNECTIONS: usize = 24;
 const READ_TIMEOUT_SECS: u64 = 600; // long renders stream no bytes; be generous
 
@@ -107,13 +111,48 @@ fn handle_connection(stream: TcpStream, state: &AppState) -> std::io::Result<()>
     let mut reader = BufReader::new(stream.try_clone()?);
 
     // Support keep-alive for UI assets, close for long media streams.
-    while let Some(req) = read_request(&mut reader)? {
-        let keep_alive = req
+    loop {
+        let Some(head) = read_request_head(&mut reader)? else {
+            break;
+        };
+        let keep_alive = head
             .header("connection")
             .map(|c| !c.eq_ignore_ascii_case("close"))
             .unwrap_or(true);
-        let is_media = req.path == "/media";
+        let is_media = head.path == "/media";
         let mut stream = stream.try_clone()?;
+
+        // Large uploads stream straight to disk — never buffered in RAM.
+        if head.method == "POST" && head.path == "/api/import_upload" {
+            let outcome = handle_upload(&head, &mut reader, state);
+            match outcome {
+                Ok(resp) => {
+                    stream.write_all(&resp)?;
+                }
+                Err(e) => {
+                    let _ = respond_simple(
+                        &stream,
+                        500,
+                        "application/json",
+                        format!("{{\"error\":\"{}\"}}", escape_json(&e.to_string())).into_bytes(),
+                    );
+                }
+            }
+            break; // body fully consumed; close the connection
+        }
+
+        let req = match finish_request_body(head, &mut reader) {
+            Ok(r) => r,
+            Err(()) => {
+                let _ = respond_simple(
+                    &stream,
+                    413,
+                    "application/json",
+                    b"{\"error\":\"request body too large\"}".to_vec(),
+                );
+                break;
+            }
+        };
         let outcome = route(&req, state, &mut stream);
         if let Err(e) = outcome {
             let _ = respond_simple(
@@ -130,7 +169,7 @@ fn handle_connection(stream: TcpStream, state: &AppState) -> std::io::Result<()>
     Ok(())
 }
 
-fn read_request(reader: &mut BufReader<TcpStream>) -> std::io::Result<Option<Request>> {
+fn read_request_head(reader: &mut BufReader<TcpStream>) -> std::io::Result<Option<Request>> {
     let mut line = String::new();
     if reader.read_line(&mut line)? == 0 {
         return Ok(None);
@@ -158,18 +197,6 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> std::io::Result<Option<Req
             headers.push((k.trim().to_string(), v.trim().to_string()));
         }
     }
-    let len: usize = headers
-        .iter()
-        .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
-        .and_then(|(_, v)| v.parse().ok())
-        .unwrap_or(0);
-    if len > MAX_BODY_BYTES {
-        return Ok(None);
-    }
-    let mut body = vec![0u8; len];
-    if len > 0 {
-        reader.read_exact(&mut body)?;
-    }
     let (path_raw, query) = match target.split_once('?') {
         Some((p, q)) => (p.to_string(), q.to_string()),
         None => (target.to_string(), String::new()),
@@ -179,8 +206,27 @@ fn read_request(reader: &mut BufReader<TcpStream>) -> std::io::Result<Option<Req
         path: url_decode(&path_raw),
         query,
         headers,
-        body,
+        body: Vec::new(),
     }))
+}
+
+fn finish_request_body(
+    mut head: Request,
+    reader: &mut BufReader<TcpStream>,
+) -> Result<Request, ()> {
+    let len: usize = head
+        .header("content-length")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    if len > MAX_BODY_BYTES {
+        return Err(());
+    }
+    let mut body = vec![0u8; len];
+    if len > 0 {
+        reader.read_exact(&mut body).map_err(|_| ())?;
+    }
+    head.body = body;
+    Ok(head)
 }
 
 fn route(req: &Request, state: &AppState, stream: &mut TcpStream) -> std::io::Result<()> {
@@ -296,6 +342,146 @@ fn api_route(
     }
 }
 
+/// Native-file-picker / drag-and-drop import. The browser POSTs the raw
+/// file bytes here (`?name=<urlencoded filename>`); the server streams the
+/// body to the project's `media/` dir and imports it. No path typing.
+fn handle_upload(
+    head: &Request,
+    reader: &mut BufReader<TcpStream>,
+    state: &AppState,
+) -> std::io::Result<Vec<u8>> {
+    let ok = |v: serde_json::Value| {
+        let mut b = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ".to_vec();
+        let body = serde_json::to_vec(&v).unwrap_or_else(|_| b"{}".to_vec());
+        b.extend_from_slice(body.len().to_string().as_bytes());
+        b.extend_from_slice(b"\r\nConnection: close\r\n\r\n");
+        b.extend_from_slice(&body);
+        Ok(b)
+    };
+    let err = |status: u16, msg: &str| {
+        let body = format!("{{\"error\":\"{}\"}}", escape_json(msg)).into_bytes();
+        let text = match status {
+            400 => "Bad Request",
+            403 => "Forbidden",
+            413 => "Payload Too Large",
+            _ => "Internal Server Error",
+        };
+        let mut b = format!("HTTP/1.1 {status} {text}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).into_bytes();
+        b.extend_from_slice(&body);
+        Ok::<Vec<u8>, std::io::Error>(b)
+    };
+
+    if !api_origin_ok(head) {
+        return err(403, "forbidden (missing X-MyCut header or cross-origin request)");
+    }
+    let name = query_param(&head.query, "name").unwrap_or_default();
+    let Some(safe_name) = sanitize_upload_name(&name) else {
+        return err(400, "missing or unsafe file name");
+    };
+    let len: u64 = head
+        .header("content-length")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    if len == 0 {
+        return err(400, "empty upload");
+    }
+    if len > MAX_UPLOAD_BYTES {
+        return err(413, "file too large (8 GiB limit)");
+    }
+
+    // Stream to the project media dir (chunked; bounded RAM).
+    let pdir = state::project_dir(state);
+    let media_dir = pdir.join("media");
+    let _ = std::fs::create_dir_all(&media_dir);
+    let stem = safe_name
+        .rsplit_once('.')
+        .map(|(s, _)| s.to_string())
+        .unwrap_or_else(|| safe_name.clone());
+    let ext = safe_name
+        .rsplit_once('.')
+        .map(|(_, e)| format!(".{e}"))
+        .unwrap_or_default();
+    let mut dest = media_dir.join(&safe_name);
+    let mut n = 1u32;
+    while dest.exists() {
+        dest = media_dir.join(format!("{stem}-{n}{ext}"));
+        n += 1;
+    }
+    {
+        let mut file = match std::fs::File::create(&dest) {
+            Ok(f) => f,
+            Err(e) => return err(500, &format!("could not write upload: {e}")),
+        };
+        let mut remaining = len;
+        let mut chunk = vec![0u8; UPLOAD_CHUNK];
+        while remaining > 0 {
+            let want = remaining.min(UPLOAD_CHUNK as u64) as usize;
+            match reader.read_exact(&mut chunk[..want]) {
+                Ok(()) => {}
+                Err(e) => {
+                    let _ = std::fs::remove_file(&dest);
+                    return err(400, &format!("upload truncated: {e}"));
+                }
+            }
+            if let Err(e) = std::io::Write::write_all(&mut file, &chunk[..want]) {
+                let _ = std::fs::remove_file(&dest);
+                return err(500, &format!("could not save upload: {e}"));
+            }
+            remaining -= want as u64;
+        }
+        let _ = file.sync_all();
+    }
+
+    // Import through the same path as CLI imports (probe, hash, thumbnail,
+    // proxy, history entry → undoable).
+    let outcome = (|| -> Result<serde_json::Value, CommandError> {
+        use mycut_engine::RenderEngine;
+        let engine = RenderEngine::new()
+            .map_err(|e| CommandError::new(500, state::ffmpeg_context(&e.to_string())))?;
+        let mut doc = state.doc.lock().unwrap();
+        let source = state::import_one(&mut doc, &engine, &pdir, &dest)?;
+        state::save_state(state, &doc)?;
+        Ok(serde_json::json!({
+            "ok": true,
+            "source": {
+                "id": source.id, "name": source.name, "rel_path": source.rel_path,
+                "duration_ms": source.duration_ms, "width": source.width,
+                "height": source.height, "has_audio": source.has_audio,
+                "role": format!("{:?}", source.role).to_lowercase(),
+            },
+        }))
+    })();
+    match outcome {
+        Ok(v) => ok(v),
+        Err(e) => {
+            // Keep the uploaded file (user can retry after fixing ffmpeg),
+            // but surface the import error honestly.
+            err(500, &e.message)
+        }
+    }
+}
+
+/// Reject path tricks and weird names outright; keep Unicode + spaces.
+fn sanitize_upload_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.len() > 240 {
+        return None;
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains('\0') {
+        return None;
+    }
+    if trimmed.starts_with('.') {
+        return None;
+    }
+    if trimmed
+        .chars()
+        .any(|c| matches!(c, ':' | '|' | '*' | '?' | '"' | '<' | '>' | '\u{0}'))
+    {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
 /// Map `camelCase` JS arg names (Tauri convention) onto the command calls.
 fn dispatch(state: &AppState, cmd: &str, body: &Value) -> Result<Value, CommandError> {
     let s = |k: &str| body.get(k).and_then(Value::as_str).map(str::to_string);
@@ -323,6 +509,47 @@ fn dispatch(state: &AppState, cmd: &str, body: &Value) -> Result<Value, CommandE
             let key = s("key").unwrap_or_default();
             state::set_api_key(&key)
         }
+        "clear_api_key" => state::clear_api_key(),
+        "key_state" => state::key_state(),
+        "ai_list_models" => {
+            let refresh = body.get("refresh").and_then(Value::as_bool).unwrap_or(false);
+            state::ai_list_models(state, refresh)
+        }
+        "ai_test_model" => state::ai_test_model(state),
+        "export_start" => state::export_start(state),
+        "export_status" => state::export_status(state),
+        "export_cancel" => state::export_cancel(state),
+        // Manual editing surface (timeline/panels) — all history-backed.
+        "effect_catalog" => edit::effect_catalog(),
+        "transition_catalog" => edit::transition_catalog(),
+        "caption_style_catalog" => edit::caption_style_catalog(),
+        "export_presets" => edit::export_presets(),
+        "split_clip" => edit::split_clip(state, &body),
+        "move_item" => edit::move_item(state, &body),
+        "delete_item" => edit::delete_item(state, &body),
+        "trim_clip" => edit::trim_clip(state, &body),
+        "duplicate_item" => edit::duplicate_item(state, &body),
+        "add_effect" => edit::add_effect(state, &body),
+        "remove_effect" => edit::remove_effect(state, &body),
+        "set_effect_param" => edit::set_effect_param(state, &body),
+        "set_item_volume" => edit::set_item_volume(state, &body),
+        "set_item_opacity" => edit::set_item_opacity(state, &body),
+        "set_clip_speed" => edit::set_clip_speed(state, &body),
+        "add_text" => edit::add_text(state, &body),
+        "update_text" => edit::update_text(state, &body),
+        "set_transitions" => edit::set_transitions(state, &body),
+        "set_color" => edit::set_color(state, &body),
+        "set_reframe" => edit::set_reframe(state, &body),
+        "set_audio_master" => edit::set_audio_master(state, &body),
+        "set_export_settings" => edit::set_export_settings(state, &body),
+        "set_track_props" => edit::set_track_props(state, &body),
+        "add_track" => edit::add_track(state, &body),
+        "remove_track" => edit::remove_track(state, &body),
+        "set_captions" => edit::set_captions(state, &body),
+        "remove_captions" => edit::remove_captions(state),
+        "remove_source" => edit::remove_source(state, &body),
+        "add_source_to_timeline" => edit::add_source_to_timeline(state, &body),
+        "reveal_source" => edit::reveal_source(state, &body),
         "ai_test_connection" => state::ai_test_connection(state),
         "render_final" => state::render_final(state),
         "render_preview_range" => state::render_preview_range(state),

@@ -224,4 +224,66 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn track_props_roundtrip_and_undo() {
+        let mut p = Project::new("t");
+        let track_id = p.tracks[0].id.clone();
+        let mut h = History::new();
+        h.apply(
+            &mut p,
+            Command::SetTrackProps {
+                track_id: track_id.clone(),
+                muted: Some(true),
+                locked: Some(true),
+                solo: None,
+            },
+        )
+        .unwrap();
+        assert!(p.tracks[0].muted && p.tracks[0].locked && !p.tracks[0].solo);
+        h.undo(&mut p).unwrap();
+        assert!(!p.tracks[0].muted && !p.tracks[0].locked);
+    }
+
+    #[test]
+    fn add_remove_track_roundtrip_and_undo() {
+        let mut p = Project::new("t");
+        let mut h = History::new();
+        let track = Track {
+            id: new_id("track"),
+            kind: TrackKind::Overlay,
+            name: "O1".into(),
+            muted: false,
+            solo: false,
+            locked: false,
+            items: vec![],
+        };
+        let track_id = track.id.clone();
+        h.apply(&mut p, Command::AddTrack { track }).unwrap();
+        assert_eq!(p.tracks.len(), 5);
+        h.apply(&mut p, Command::RemoveTrack { track_id }).unwrap();
+        assert_eq!(p.tracks.len(), 4);
+        h.undo(&mut p).unwrap();
+        assert_eq!(p.tracks.len(), 5, "remove is undone");
+        h.undo(&mut p).unwrap();
+        assert_eq!(p.tracks.len(), 4, "add is undone");
+    }
+
+    #[test]
+    fn duplicate_track_id_rejected() {
+        let mut p = Project::new("t");
+        let mut h = History::new();
+        let existing = p.tracks[0].id.clone();
+        let track = Track {
+            id: existing,
+            kind: TrackKind::Audio,
+            name: "dup".into(),
+            muted: false,
+            solo: false,
+            locked: false,
+            items: vec![],
+        };
+        let r = h.apply(&mut p, Command::AddTrack { track });
+        assert!(matches!(r, Err(CoreError::Invalid(_))));
+    }
 }

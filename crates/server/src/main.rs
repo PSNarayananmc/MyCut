@@ -226,6 +226,9 @@ fn main() {
         settings: Mutex::new(settings),
         cache_dir,
         cancel: AtomicBool::new(false),
+        models_cache: Mutex::new(mycut_server::state::ModelsCache::default()),
+        export: mycut_server::jobs::ExportState::default(),
+        conversation: Mutex::new(Vec::new()),
     };
 
     let server = match mycut_server::http::Server::bind(&args.host, args.port, state) {

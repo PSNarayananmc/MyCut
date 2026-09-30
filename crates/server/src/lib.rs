@@ -9,6 +9,8 @@
 //! jailed roots (project dir, cache dir, export dir).
 
 pub mod assets;
+pub mod edit;
+pub mod jobs;
 pub mod doctor;
 pub mod http;
 pub mod state;

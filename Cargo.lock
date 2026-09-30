@@ -300,7 +300,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "mycut-ai"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hex",
  "mycut-analysis",
@@ -316,7 +316,7 @@ dependencies = [
 
 [[package]]
 name = "mycut-analysis"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hex",
  "mycut-core",
@@ -329,7 +329,7 @@ dependencies = [
 
 [[package]]
 name = "mycut-captions"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "mycut-core",
  "serde",
@@ -340,7 +340,7 @@ dependencies = [
 
 [[package]]
 name = "mycut-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "mycut-ai",
  "mycut-analysis",
@@ -355,7 +355,7 @@ dependencies = [
 
 [[package]]
 name = "mycut-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -364,7 +364,7 @@ dependencies = [
 
 [[package]]
 name = "mycut-engine"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "mycut-analysis",
  "mycut-core",
@@ -376,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "mycut-projects"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hex",
  "keyring",
@@ -390,7 +390,7 @@ dependencies = [
 
 [[package]]
 name = "mycut-schema"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "mycut-core",
  "mycut-engine",
@@ -402,7 +402,7 @@ dependencies = [
 
 [[package]]
 name = "mycut-server"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "mycut-ai",
  "mycut-analysis",

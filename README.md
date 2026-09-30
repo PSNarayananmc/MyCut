@@ -18,24 +18,40 @@ Prompt → Local analysis (cached) → Context builder → LLM planner (NIM)
 
 - **AI prompt-based editing** — natural-language edit requests become a
   validated, undoable plan (one AI plan = one transaction; Ctrl+Z undoes it
-  as one step).
-- **NVIDIA NIM integration** — your key, your machine, your model choice;
-  structured output with a bounded validation/repair loop.
+  as one step). Chat remembers the last exchanges, so follow-ups like
+  "make it faster" work.
+- **NVIDIA NIM integration with model discovery** — **Test Connection**
+  verifies the key, the base URL and authentication, then lists the models
+  your endpoint actually offers; the searchable **model selector** is fed by
+  that real response (cached, refreshable, persisted across restarts), and
+  **Test Model** proves the selected model answers. No hardcoded model list.
+- **Real desktop workflow** — native OS **file picker** (multi-select) and
+  **drag-and-drop** import (spaces/Unicode names fine), a media library with
+  thumbnails/search/categories, a **multitrack timeline** (move, trim,
+  split, delete, duplicate, snap, mute/lock, zoom), an inspector with live
+  effect-parameter sliders, and full keyboard shortcuts (Space, S, Del,
+  Ctrl+Z/Shift+Z, Ctrl+S, Ctrl+E).
+- **Effects / text / captions / color panels** — every button maps to a real
+  FFmpeg-backed operation from the registries: zoom/punch/shake/blur/sharpen/
+  vignette/RGB-split/grain/pixelate/flash/bars, audio FX (normalize, denoise,
+  fades, compressor, limiter), 9 caption styles, and project color grading.
+- **Export presets with progress** — YouTube, YouTube Shorts, TikTok,
+  Instagram Reels, Discord, X and Custom; live progress parsed from the
+  encoder itself and a working **Cancel**.
 - **Automatic cuts** — scene detection, silence removal, loudness (EBU R128),
   motion and highlight analysis, all cached by content hash.
 - **Captions** — sentence-aware segmentation, multiple styles including
   karaoke/word-highlight, burned in via libass (ASS).
-- **Transitions & effects** — xfade transitions, zoom-punch, shake, vignette,
-  grain and more, all real FFmpeg filters (no fake previews).
-- **Color correction** — exposure/contrast/saturation plus creative LUTs.
-- **Audio editing** — normalize, noise gate, fade, per-clip effects; A/V sync
-  is designed in (cuts happen at the cut level, never audio-only).
+- **Transitions & effects** — xfade transitions (fade, dip, slide, push,
+  zoom, wipe), all real FFmpeg filters (no fake previews).
+- **Color correction** — exposure/contrast/saturation/vibrance/temperature/
+  gamma plus creative LUTs.
 - **FFmpeg rendering** — fixed pipeline order, single final encode from the
   original media (instructions stored, never pixels).
 - **Plugin/effect architecture** — effects are data-driven registry entries;
   see [docs/EFFECT_PLUGIN_GUIDE.md](docs/EFFECT_PLUGIN_GUIDE.md).
 - **Linux support** — Ubuntu 20.04+ packages below; runs on 8 GB / iGPU
-  machines without GPU acceleration.
+  machines without GPU acceleration; no telemetry, no background daemons.
 
 ## Supported platforms
 
@@ -103,13 +119,26 @@ message. The minimum is FFmpeg 4.3 (for `xfade`).
 ## NVIDIA NIM API key configuration
 
 1. Create an API key at <https://build.nvidia.com> (integrate.api.nvidia.com).
-2. In MyCut, open **Settings** and paste the key.
+2. In MyCut, open **Settings → AI Provider** and paste the key, then press
+   **Save Key**.
    - The key is stored in your OS secret service (GNOME Keyring) when
      available, otherwise in a `0600` file under `~/.config/mycut/`.
-   - It never reaches the browser JavaScript, logs, or project files.
-3. Optional: adjust the base URL and model in **Settings** (default model:
-   `meta/llama-3.1-8b-instruct`).
-4. **Test connection** performs a real request and reports the result.
+   - It never reaches the browser JavaScript, logs, or project files — the
+     settings panel only ever shows whether a key is stored.
+3. Press **Test Connection**. It checks the key, the base URL and
+   authentication, then reports what it actually found, e.g.
+   `✓ NVIDIA NIM connection successful · authentication successful · 42 models available`.
+   Failures are specific (HTTP 401 → "the API key was rejected", 503 →
+   "provider unavailable", network errors named as such — never a bare
+   "server error").
+4. Pick a model in the **searchable dropdown** populated by the provider's
+   model list (`GET /v1/models`). Use **Refresh Models** to re-query; the
+   list is cached and invalidated when the key or base URL changes. If your
+   provider has no model-list endpoint, MyCut says so and offers a manual
+   model-ID field instead. If a saved model later disappears from the
+   provider, the UI tells you rather than silently switching.
+5. Optional: **Test Model** sends a minimal request to verify the selected
+   model is actually usable.
 
 No key? Everything except AI planning works offline: import, manual edits,
 analysis, preview, export.
@@ -124,7 +153,7 @@ Requirements: Linux, **Rust 1.98+** (stable), **Node.js ≥ 20**, and FFmpeg
 npm --prefix ui ci
 npm --prefix ui run build       # outputs to src-tauri/dist
 
-# 2. Tests (115 tests: unit, integration, real-HTTP runtime E2E)
+# 2. Tests (145+ tests: unit, integration, real-HTTP runtime E2E)
 cargo test --workspace
 
 # 3. Run the local web runtime in dev
@@ -170,8 +199,8 @@ cargo build --release -p mycut-app        # crate `mycut-app`, excluded from wor
 | `FFmpeg x.y is too old (need >= 4.3)` | Your system FFmpeg lacks `xfade`. Stop overriding the sidecar (`unset MYCUT_USE_SYSTEM_FFMPEG`) or install a newer FFmpeg. |
 | AppImage does not start (FUSE error) | `sudo apt install libfuse2`, or run with `--appimage-extract-and-run`. |
 | Browser shows "backend offline (UI dev mode)" | The runtime process exited — restart `mycut` and reload the page. |
-| Import does nothing in the browser UI | The browser cannot hand the server absolute paths. Use `mycut --import /path/to/clip.mp4 …`, or the Import button's path prompt. |
-| AI returns `no-api-key` | Set the key in Settings (see above). AI planning is the only feature that needs it. |
+| AI says a key is not configured | Settings → AI Provider → paste the key → **Save Key** (typing the key alone does not store it). AI planning is the only feature that needs it. |
+| "Selected model is no longer available" | Your saved model ID vanished from the provider's list — pick another in Settings. MyCut never switches models silently. |
 | `version ... is newer than this app supports` | The `.mycut` file was written by a newer MyCut; upgrade the app. |
 
 Runtime environment variables: `MYCUT_NO_OPEN=1` (don't open a browser),
@@ -194,10 +223,11 @@ Runtime environment variables: `MYCUT_NO_OPEN=1` (don't open a browser),
 
 See [STATUS.md](STATUS.md) for the full evidence-backed matrix. Known
 limitations of this release: preview is proxy-based (not a real-time
-compositor), media relink is partial, transcription ships via whisper.cpp
-but is not wired into the GUI loop yet, and the Tauri shell is built/tested
-only where WebKitGTK 4.1 exists. Multi-track compositing and keyframe UI are
-on the roadmap.
+compositor), images import into the library but timeline placement of
+stills follows the probed single-frame duration, transcription ships via
+whisper.cpp but is not wired into the captions panel yet, and the Tauri
+shell is built/tested only where WebKitGTK 4.1 exists. Multi-track video
+compositing and keyframe editing are on the roadmap.
 
 ## Contributing
 

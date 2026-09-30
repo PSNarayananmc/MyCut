@@ -14,7 +14,8 @@ pub use prompt::{
     TimelineSummary, PROMPT_VERSION,
 };
 pub use provider::{
-    AIProvider, AiError, Caps, ChatMessage, NimConfig, NvidiaNimProvider, PlanRequest, PlanResponse,
+    AIProvider, AiError, Caps, ChatMessage, ModelInfo, NimConfig, NvidiaNimProvider, PlanRequest,
+    PlanResponse,
 };
 
 #[cfg(test)]
@@ -354,6 +355,99 @@ mod tests {
         let cancel = AtomicBool::new(true);
         let err = provider.test_connection_cancellable(&cancel).unwrap_err();
         assert!(matches!(err, AiError::Provider(ref m) if m.contains("cancel")));
+    }
+
+    #[test]
+    fn list_models_parses_provider_response() {
+        let (base, counter) = spawn(Arc::new(|_, line, _| {
+            if line.starts_with("GET /models") {
+                StubResponse {
+                    status: 200,
+                    body: serde_json::json!({
+                        "object": "list",
+                        "data": [
+                            {"id": "qwen/qwen2.5-7b-instruct", "owned_by": "qwen"},
+                            {"id": "meta/llama-3.1-8b-instruct", "owned_by": "meta"},
+                            {"id": "meta/llama-3.1-8b-instruct", "owned_by": "meta"}
+                        ]
+                    })
+                    .to_string(),
+                    headers: vec![],
+                    delay_ms: 0,
+                }
+            } else {
+                StubResponse { status: 500, body: "{}".into(), headers: vec![], delay_ms: 0 }
+            }
+        }));
+        let provider = NvidiaNimProvider::new(test_config(&base, "sk-test"));
+        let models = provider.list_models().expect("models");
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        let ids: Vec<_> = models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids.len(), 2, "duplicates deduped");
+        assert!(ids.contains(&"meta/llama-3.1-8b-instruct"));
+        assert!(ids.contains(&"qwen/qwen2.5-7b-instruct"));
+        assert_eq!(models[0].id, "meta/llama-3.1-8b-instruct", "sorted");
+    }
+
+    #[test]
+    fn list_models_maps_401_to_invalid_key() {
+        let (base, _) = spawn(Arc::new(|_, _, _| StubResponse {
+            status: 401,
+            body: r#"{"detail":"invalid"}"#.into(),
+            headers: vec![],
+            delay_ms: 0,
+        }));
+        let provider = NvidiaNimProvider::new(test_config(&base, "bad-key"));
+        assert!(matches!(
+            provider.list_models().unwrap_err(),
+            AiError::InvalidApiKey
+        ));
+    }
+
+    #[test]
+    fn list_models_maps_404_to_discovery_unavailable() {
+        let (base, _) = spawn(Arc::new(|_, _, _| StubResponse {
+            status: 404,
+            body: "not found".into(),
+            headers: vec![],
+            delay_ms: 0,
+        }));
+        let provider = NvidiaNimProvider::new(test_config(&base, "sk-test"));
+        assert!(matches!(
+            provider.list_models().unwrap_err(),
+            AiError::DiscoveryUnavailable
+        ));
+    }
+
+    #[test]
+    fn list_models_requires_key() {
+        let (base, counter) = spawn(Arc::new(|_, _, _| StubResponse {
+            status: 200,
+            body: "{\"data\":[]}".into(),
+            headers: vec![],
+            delay_ms: 0,
+        }));
+        let provider = NvidiaNimProvider::new(test_config(&base, ""));
+        assert!(matches!(
+            provider.list_models().unwrap_err(),
+            AiError::InvalidApiKey
+        ));
+        assert_eq!(counter.load(Ordering::SeqCst), 0, "no request without key");
+    }
+
+    #[test]
+    fn list_models_empty_data_is_discovery_unavailable() {
+        let (base, _) = spawn(Arc::new(|_, _, _| StubResponse {
+            status: 200,
+            body: "{\"object\":\"list\",\"data\":[]}".into(),
+            headers: vec![],
+            delay_ms: 0,
+        }));
+        let provider = NvidiaNimProvider::new(test_config(&base, "sk-test"));
+        assert!(matches!(
+            provider.list_models().unwrap_err(),
+            AiError::DiscoveryUnavailable
+        ));
     }
 
     // Live NIM test — gated on NVIDIA_NIM_API_KEY. Run manually:

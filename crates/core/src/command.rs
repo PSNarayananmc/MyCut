@@ -111,6 +111,22 @@ pub enum Command {
     RestoreCaptionsItem {
         item: Item,
     },
+    /// Set mute/solo/lock on one track (manual UI). `None` = keep current.
+    SetTrackProps {
+        track_id: String,
+        muted: Option<bool>,
+        solo: Option<bool>,
+        locked: Option<bool>,
+    },
+    /// Add a whole track (manual UI; e.g. an extra overlay or audio track).
+    AddTrack {
+        track: crate::model::Track,
+    },
+    /// Remove a track **including its items** (manual UI). The inverse
+    /// restores the full track snapshot, so undo is lossless.
+    RemoveTrack {
+        track_id: String,
+    },
 }
 
 impl Command {
@@ -141,6 +157,9 @@ impl Command {
             Command::ReplaceCaptions { .. } => "Generate captions",
             Command::RemoveCaptions => "Remove captions",
             Command::RestoreCaptionsItem { .. } => "Restore captions",
+            Command::SetTrackProps { .. } => "Track settings",
+            Command::AddTrack { .. } => "Add track",
+            Command::RemoveTrack { .. } => "Remove track",
         }
     }
 
@@ -579,6 +598,51 @@ impl Command {
                 let restored = item.clone();
                 track.items.push(restored);
                 Ok(Command::RemoveCaptions)
+            }
+            Command::SetTrackProps {
+                track_id,
+                muted,
+                solo,
+                locked,
+            } => {
+                let track = p
+                    .tracks
+                    .iter_mut()
+                    .find(|t| t.id == *track_id)
+                    .ok_or_else(|| CoreError::NotFound(format!("track {track_id}")))?;
+                let old = (track.muted, track.solo, track.locked);
+                if let Some(m) = muted {
+                    track.muted = *m;
+                }
+                if let Some(s) = solo {
+                    track.solo = *s;
+                }
+                if let Some(l) = locked {
+                    track.locked = *l;
+                }
+                Ok(Command::SetTrackProps {
+                    track_id: track_id.clone(),
+                    muted: Some(old.0),
+                    solo: Some(old.1),
+                    locked: Some(old.2),
+                })
+            }
+            Command::AddTrack { track } => {
+                if p.tracks.iter().any(|t| t.id == track.id) {
+                    return Err(CoreError::Invalid("duplicate track id".into()));
+                }
+                let added = track.clone();
+                p.tracks.push(added.clone());
+                Ok(Command::RemoveTrack { track_id: added.id })
+            }
+            Command::RemoveTrack { track_id } => {
+                let pos = p
+                    .tracks
+                    .iter()
+                    .position(|t| t.id == *track_id)
+                    .ok_or_else(|| CoreError::NotFound(format!("track {track_id}")))?;
+                let removed = p.tracks.remove(pos);
+                Ok(Command::AddTrack { track: removed })
             }
         }
     }

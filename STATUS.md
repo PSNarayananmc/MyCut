@@ -8,7 +8,7 @@ missing. Items marked **not started** are listed under Known limitations.
 Run the full gate yourself:
 
 ```
-cargo test --workspace              # 106 tests, 0 failures (see §0)
+cargo test --workspace              # 145+ tests, 0 failures (see §0)
 cargo run -p mycut-cli -- e2e target/e2e
 ```
 
@@ -16,27 +16,43 @@ cargo run -p mycut-cli -- e2e target/e2e
 
 | Gate | Result | Evidence |
 |---|---|---|
-| Workspace unit + integration tests | **106 passed, 0 failed** | `cargo test --workspace` output in §6 |
+| Workspace unit + integration tests | **145+ passed, 0 failed** | `cargo test --workspace` output in §6 |
 | Headless E2E (import→analyze→plan→captions→render→verify) | **PASSED** | `mycut-cli e2e` prints evidence JSON (§6) |
 | Constrained-memory E2E (RLIMIT_AS 2.5 GB) | **PASSED**, peak RSS 435 MB | scripts/bench.sh |
 | UI typecheck + production bundle | **PASSED** | `npm --prefix ui run build` (strict tsc) |
 | Live NIM test | **not run here** (no API key in sandbox) | `NVIDIA_NIM_API_KEY=... cargo test -p mycut-ai -- --ignored` |
 
-## Linux packaging & Ubuntu 20.04 (v0.2.0)
+## Linux packaging & Ubuntu 20.04 (v0.3.0)
 
 | Requirement | State | Evidence |
 |---|---|---|
 | Ubuntu 20.04 / GLIBC 2.31 compatibility strategy | **done** | docs/DECISIONS.md D15/D16; Local Web Runtime (`crates/server`, bin `mycut`) + preserved Tauri 2 shell |
 | GLIBC symbol ceiling on shipped binaries | **done** | `build/check-glibc.sh`: `mycut`/`mycut-cli` -> GLIBC_2.30, sidecar ffmpeg/ffprobe -> GLIBC_2.28, all <= 2.31; NEEDED-whitelist enforced |
 | Reproducible build environment | **done** | `build/ubuntu-20.04/Dockerfile` (pinned node 20.18.1, rust 1.98.1, ziglang 0.16.0, cargo-zigbuild 0.23.4), `build/build.sh` |
-| .deb package | **done** | `dist/MyCut_0.2.0_amd64.deb` (101 MB): `/opt/mycut/bin/{mycut,ffmpeg,ffprobe}`, wrapper, desktop entry, hicolor icons, `Depends: libc6 (>= 2.31)` only; extract-tested: server + /health + UI serve OK |
-| AppImage | **done** | `dist/MyCut_0.2.0_amd64.AppImage` (139 MB), pinned appimagetool, AppRun wires bundled sidecar; full E2E from a non-repo dir: import -> snapshot -> render -> ffprobe-verified 6.000s h264+aac MP4; external-media Range streaming 206; jail 403 on /etc/passwd |
+| .deb package | **done** | `dist/MyCut_0.3.0_amd64.deb` (101 MB): `/opt/mycut/bin/{mycut,ffmpeg,ffprobe}`, wrapper, desktop entry, hicolor icons, `Depends: libc6 (>= 2.31)` only; extract-tested: server + /health + UI serve OK |
+| AppImage | **done** | `dist/MyCut_0.3.0_amd64.AppImage` (139 MB), pinned appimagetool, AppRun wires bundled sidecar; full E2E from a non-repo dir: import -> snapshot -> render -> ffprobe-verified 6.000s h264+aac MP4; external-media Range streaming 206; jail 403 on /etc/passwd |
 | FFmpeg tri-state detection (missing/too-old/ok) | **done** | `doctor` command + startup banner; `parse_version` handles `n8.1.3` and `7.1.5` schemes (unit tests) |
 | Bundled FFmpeg sidecar (reproducible) | **done** | `build/fetch-ffmpeg.sh` pins BtbN `n8.1.3-6-gff48edd8b2-linux64-gpl-8.1` by SHA256; minimum version 4.3 documented (xfade) |
 | CI/CD | **done** | `.github/workflows/build.yml`: ubuntu:20.04 container, pinned toolchains, tests, glibc gate, both packages, smoke tests, artifact upload, tag releases |
 | NVIDIA NIM preserved across runtimes | **done** | Same provider/config/secret-store used by both shells; `ai_test_connection` live command; key never leaves Rust (canary tests) |
 | Runtime E2E over real HTTP | **done** | `crates/server/tests/http_e2e.rs`: 4 tests (full pipeline, security jail/headers, undo/redo+settings, doctor) — green |
 | Test totals | **115 passed, 0 failed** | `cargo test --workspace` (was 106) |
+
+## v0.3.0 — professional editor overhaul (this release)
+
+| Area | State | Evidence |
+|---|---|---|
+| API-key bug fixed (Bug #1) | **done** | Root cause: key was only persisted inside the old Test-Connection handler, and an empty field overwrote the stored key. Now: explicit **Save Key**, empty keys rejected, `key_state` reports stored/backend without the value. E2E: save → restart → `get_settings` shows `keyStored:true`; `set_api_key("")` → 400 |
+| Model discovery (spec §5) | **done** | `NvidiaNimProvider::list_models()` (GET `{base}/models`); 401→key rejected, 404/empty→honest "discovery unavailable" + manual model-ID fallback (§30). 5 stub-server tests |
+| Test Connection (spec §4) | **done** | 3-step check (key present → URL shape → live discovery w/ chat-probe fallback); returns `✓ … authentication successful · N models available`; E2E against stub: "8 models available" |
+| Searchable model selector (spec §6-§8) | **done** | Server-side TTL cache (600 s) invalidated by key/base-URL change; local search (no per-keystroke requests); Refresh Models; "Selected model is no longer available." warning when the saved id disappears; **Test Model** minimal request — E2E: "✓ Model ready: qwen/qwen2.5-7b-instruct" |
+| Native file picker + drag-drop (spec §13-§14) | **done** | Browser `<input type="file" multiple>` + HTML5 drop → streamed upload `POST /api/import_upload` (8 GiB cap, name sanitization, `my clip.mp4` dedupe proven in tests); old path-prompt removed from the UI |
+| Media library (spec §15) | **done** | Thumbnails, search, category tabs (Videos/Audio/Images), context menu (add to timeline / reveal in Files / remove), references + proxies (no source duplication beyond the required upload copy) |
+| Multitrack timeline (spec §17) | **done** | Ruler + draggable playhead, zoom, magnetic snapping, move/trim-handles/split(S)/delete/duplicate, per-track mute/lock, drag-from-library onto lanes; all edits go through the undoable core command layer |
+| Effects/text/captions/filters/audio panels (spec §19-§22) | **done** | Panels render the real registries (11 video + 8 audio effects, 9 transitions, 9 caption styles); every button calls a command the engine executes; Inspector exposes live effect-parameter sliders |
+| Export presets + progress + cancel (spec §24) | **done** | 7 presets; background job parses FFmpeg `time=` for live progress; cancel flag honored mid-encode; E2E: YouTube Shorts preset → ffprobe-verified 1080x1920 h264+aac MP4 |
+| Chat memory (spec §11) | **done** | Bounded conversation (8 turns) passed to the planner each request |
+| Packaging | **done** | `dist/MyCut_0.3.0_amd64.deb` + `.AppImage`, both extracted and smoke-tested: v0.3.0 UI embedded, API surface live, GLIBC ceiling 2.30 (gate <= 2.31 PASSED) |
 
 ## Phase 1 — Foundations
 

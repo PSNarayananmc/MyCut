@@ -44,8 +44,21 @@ pub enum AiError {
     Timeout,
     #[error("The model returned invalid output after repairs: {0}")]
     BadOutput(String),
+    #[error("Connected to the provider, but model discovery is not available.")]
+    DiscoveryUnavailable,
     #[error("Provider error: {0}")]
     Provider(String),
+}
+
+/// One model as reported by the provider's discovery endpoint. Only fields
+/// actually present in the API response are populated (no invented metadata).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelInfo {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owned_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +141,87 @@ impl NvidiaNimProvider {
                 structured_output: true,
                 max_context: 8192,
             },
+        }
+    }
+
+    /// The model this provider instance is configured to call.
+    #[must_use]
+    pub fn model(&self) -> &str {
+        &self.cfg.model
+    }
+
+    /// Query the provider's OpenAI-compatible model-list endpoint
+    /// (`GET {base_url}/models`). Auth is verified by the same call — a
+    /// 401/403 surfaces as [`AiError::InvalidApiKey`]. A 404 on the models
+    /// path maps to [`AiError::DiscoveryUnavailable`] so the UI can fall
+    /// back to a manual model id (spec §30) instead of a dead end.
+    ///
+    /// # Errors
+    /// [`AiError`] after the HTTP round-trip classification.
+    pub fn list_models(&self) -> Result<Vec<ModelInfo>, AiError> {
+        if self.cfg.api_key.trim().is_empty() {
+            return Err(AiError::InvalidApiKey);
+        }
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(30))
+            .build();
+        let url = format!("{}/models", self.cfg.base_url.trim_end_matches('/'));
+        let resp = agent
+            .get(&url)
+            .set("Authorization", &format!("Bearer {}", self.cfg.api_key))
+            .set("Accept", "application/json")
+            .call();
+        match resp {
+            Ok(r) => {
+                let parsed: serde_json::Value = r
+                    .into_json()
+                    .map_err(|e| AiError::Provider(e.to_string()))?;
+                let mut models: Vec<ModelInfo> = parsed["data"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|m| {
+                                let id = m["id"].as_str()?.to_string();
+                                if id.is_empty() {
+                                    return None;
+                                }
+                                Some(ModelInfo {
+                                    id,
+                                    owned_by: m["owned_by"].as_str().map(str::to_string),
+                                    created: m["created"].as_i64(),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                models.sort_by(|a, b| a.id.cmp(&b.id));
+                models.dedup_by(|a, b| a.id == b.id);
+                if models.is_empty() {
+                    // Endpoint answered but no parsable list: discovery is
+                    // effectively unavailable for this provider shape.
+                    return Err(AiError::DiscoveryUnavailable);
+                }
+                Ok(models)
+            }
+            Err(ureq::Error::Status(code, _)) => match code {
+                401 | 403 => Err(AiError::InvalidApiKey),
+                404 => Err(AiError::DiscoveryUnavailable),
+                429 => Err(AiError::RateLimited),
+                500..=599 => Err(AiError::Provider(format!(
+                    "model discovery failed — provider returned HTTP {code}"
+                ))),
+                _ => Err(AiError::Provider(format!(
+                    "model discovery failed — HTTP {code}"
+                ))),
+            },
+            Err(ureq::Error::Transport(t)) => {
+                let msg = t.to_string();
+                if msg.contains("timed out") || msg.contains("timeout") {
+                    Err(AiError::Timeout)
+                } else {
+                    Err(AiError::Network)
+                }
+            }
         }
     }
 
